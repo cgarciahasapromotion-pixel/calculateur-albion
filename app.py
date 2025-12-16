@@ -10,7 +10,7 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 # --- CONSTANTES JURIDIQUES ---
 DATE_JUGEMENT = date(2025, 6, 26)
 
-# Taux d'intérêt légal (BCE + 10 points)
+# Taux d'intérêt légal (BCE + 10 points) - Source Banque de France
 TAUX_LEGAUX = [
     (date(2019, 1, 1), 10.00),
     (date(2019, 7, 1), 10.00),
@@ -27,7 +27,7 @@ TAUX_LEGAUX = [
     (date(2025, 1, 1), 13.50)
 ]
 
-# Indices ILC
+# Indices ILC (INSEE)
 INDICES = {
     "BASE": 114.06, # T1 2019
     "2019": 116.16, # Applicable Juin 2020
@@ -161,28 +161,54 @@ class PDF(FPDF):
 st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
 
 # --- SECTION PÉDAGOGIQUE ---
-with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres (Cliquez ici)", expanded=True):
-    st.markdown("""
-    **Pourquoi cet outil ?**
-    Pour calculer votre créance exacte au centime près, en appliquant les indexations ILC (inflation) et les pénalités de retard légales.
-    
-    **1. HT ou TTC ?**
-    * Le bail fixe un loyer **HT (Hors Taxes)**.
-    * L'application ajoute automatiquement **10% de TVA**.
-    * Le résultat final (Dette) est affiché en **TTC**, car c'est ce que vous devez comparer aux virements reçus.
-    
-    **2. Le Principal Net (Créance Privilégiée)**
-    * C'est l'argent du loyer "pur" qui manque.
-    * *Calcul :* (Loyers TTC théoriques indexés) - (Virements TTC reçus).
-    
-    **3. Les Intérêts de Retard (Créance Chirographaire)**
-    * L'argent a un coût. Le Code de Commerce impose des pénalités entre professionnels.
-    * Le taux appliqué ici est le taux légal (Refi BCE + 10 points), soit environ 13-14% par an.
-    """)
+col_info1, col_info2 = st.columns(2)
+
+with col_info1:
+    with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres", expanded=False):
+        st.markdown("""
+        **Pourquoi cet outil ?**
+        Pour calculer votre créance exacte, en appliquant les indexations ILC (inflation) et les pénalités de retard légales.
+        
+        **1. HT ou TTC ?**
+        * Le bail fixe un loyer **HT**. L'appli ajoute 10% de TVA.
+        * Le résultat final est en **TTC**.
+        
+        **2. Le Principal Net (Privilégié)**
+        * C'est le loyer "pur" qui manque.
+        * *Calcul :* (Loyers TTC théoriques indexés) - (Virements TTC reçus).
+        
+        **3. Les Intérêts de Retard (Chirographaire)**
+        * Le taux appliqué est le taux légal (Refi BCE + 10 points), soit environ 13-14% par an.
+        """)
+
+with col_info2:
+    with st.expander("📈 TABLEAUX DE RÉFÉRENCE (ILC & Taux)", expanded=False):
+        st.markdown("**1. Évolution de l'Indice ILC (Insee)**")
+        df_ilc_ref = pd.DataFrame([
+            {"Année": "2019", "Valeur": 114.06, "Application": "Base Bail"},
+            {"Année": "2019 (T4)", "Valeur": 116.16, "Application": "Juin 2020"},
+            {"Année": "2020 (T4)", "Valeur": 115.79, "Application": "Juin 2021"},
+            {"Année": "2021 (T4)", "Valeur": 118.59, "Application": "Juin 2022"},
+            {"Année": "2022 (T4)", "Valeur": 126.05, "Application": "Juin 2023"},
+            {"Année": "2023 (T4)", "Valeur": 132.63, "Application": "Juin 2024"},
+            {"Année": "2024 (T4)", "Valeur": 135.30, "Application": "Juin 2025"}
+        ])
+        st.dataframe(df_ilc_ref, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("**2. Évolution Taux Intérêt (BCE + 10pts)**")
+        # Création DataFrame Taux pour affichage propre
+        data_taux_display = []
+        for d, t in TAUX_LEGAUX:
+            data_taux_display.append({"Date d'effet": d.strftime("%d/%m/%Y"), "Taux": f"{t:.2f} %"})
+        st.dataframe(pd.DataFrame(data_taux_display), hide_index=True)
+
 
 # SESSION STATE
 if 'paiements' not in st.session_state:
     st.session_state.paiements = []
+
+st.write("---")
 
 col_left, col_right = st.columns([1, 2])
 
@@ -196,7 +222,7 @@ with col_left:
     st.info("Ajoutez ici chaque virement reçu **AVANT le 26/06/2025**.")
     
     with st.form("ajout_paiement"):
-        # MODIFICATION ICI : Format JJ/MM/AAAA (DD/MM/YYYY)
+        # Format JJ/MM/AAAA (DD/MM/YYYY)
         d_paiement = st.date_input("Date du virement", value=date(2024, 1, 1), format="DD/MM/YYYY")
         m_paiement = st.number_input("Montant Reçu TTC (€)", min_value=0.0, step=10.0)
         submit = st.form_submit_button("Ajouter ce paiement")
@@ -214,7 +240,6 @@ with col_left:
         st.write("**Historique des virements saisis :**")
         p_df = pd.DataFrame(st.session_state.paiements)
         
-        # MODIFICATION ICI : Affichage de la date en JJ/MM/AAAA dans le petit tableau
         st.dataframe(p_df.style.format({
             "montant": "{:.2f} € TTC",
             "date": lambda t: t.strftime("%d/%m/%Y")
@@ -292,7 +317,6 @@ if loyer_ht > 0:
         st.success(f"### 💰 TOTAL À DÉCLARER : {total_creance:,.2f} €")
         
         with st.expander("Voir le détail ligne par ligne"):
-            # MODIFICATION ICI : Formatage complet du tableau de résultats (Date FR + Montants)
             st.dataframe(df_final.style.format({
                 "Débit (TTC)": "{:.2f}", 
                 "Crédit (TTC)": "{:.2f}", 
@@ -341,7 +365,6 @@ if loyer_ht > 0:
     
     pdf.set_font("Arial", size=8)
     for index, row in df_final.iterrows():
-        # MODIFICATION ICI : Formatage de la date en FR pour le PDF
         d_str = row['Date'].strftime("%d/%m/%Y")
         pdf.cell(25, 6, d_str, 1)
         pdf.cell(60, 6, str(row['Libellé']), 1)
