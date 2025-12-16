@@ -73,6 +73,8 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
 
 # --- MOTEUR 1 : PRÉ-RJ (DÉCLARATION) ---
 def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
+    # NOTE : Pour la déclaration de créance (passif), on déclare la dette d'occupation
+    # arrêtée au jour du jugement, peu importe la date de paiement théorique.
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     echeances = []
@@ -128,42 +130,47 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
 
     return echeances
 
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT) ---
+# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - MODIFIÉ TERME ÉCHU) ---
 def generer_loyers_post_rj(loyer_annuel_ht):
-    """Génère les loyers à partir du 27/06/2025"""
+    """Génère les loyers à partir du 27/06/2025 (PAYABLES À TERME ÉCHU)"""
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
-    # On utilise le dernier indice connu (2024) pour 2025 et suite (provisionnel)
+    # Loyer provisionnel (Dernier indice connu)
     loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
     
     echeances = []
     
-    # 1. Fin Juin 2025 (4 jours : 27, 28, 29, 30)
+    # 1. Solde Juin 2025 (27 au 30 juin)
+    # T2 (Avril-Mai-Juin) payable terme échu -> Juillet.
+    # Donc le solde de juin est exigible début Juillet.
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
     echeances.append({
-        "date": date(2025, 6, 30), # Exigible fin de mois
-        "label": "Solde Juin 2025 (4j Post-RJ)",
+        "date": date(2025, 7, 10), # Exigible en Juillet
+        "label": "Solde Juin 2025 (Payable Juillet)",
         "montant": montant_fin_juin
     })
     
     # 2. T3 2025 (Juillet - Aout - Septembre)
+    # Terme échu -> Payable en OCTOBRE
     echeances.append({
-        "date": date(2025, 7, 1),
-        "label": "T3 2025 (Juillet-Sept)",
+        "date": date(2025, 10, 10), # Exigible le 10 Octobre
+        "label": "T3 2025 (Payable Octobre)",
         "montant": loyer_mensuel_2025 * 3
     })
     
     # 3. T4 2025 (Octobre - Nov - Dec)
+    # Terme échu -> Payable en JANVIER 2026
     echeances.append({
-        "date": date(2025, 10, 1),
-        "label": "T4 2025 (Oct-Dec)",
+        "date": date(2026, 1, 10), # Exigible le 10 Janvier 2026
+        "label": "T4 2025 (Payable Janvier 26)",
         "montant": loyer_mensuel_2025 * 3
     })
     
     # 4. T1 2026 (Provisionnel)
+    # Terme échu -> Payable en AVRIL 2026
     echeances.append({
-        "date": date(2026, 1, 1),
-        "label": "T1 2026 (Provisionnel)",
+        "date": date(2026, 4, 10),
+        "label": "T1 2026 (Payable Avril 26)",
         "montant": loyer_mensuel_2025 * 3
     })
 
@@ -210,15 +217,12 @@ with st.sidebar:
     if uploaded_file:
         try:
             data = json.load(uploaded_file)
-            # Chargement Pré-RJ
             st.session_state.paiements_pre = []
-            for p in data.get("paiements", []): # Compatibilité ancienne version
+            for p in data.get("paiements", []):
                 st.session_state.paiements_pre.append({"date": datetime.strptime(p["date"], "%Y-%m-%d").date(), "montant": p["montant"]})
-            # Chargement Post-RJ
             st.session_state.paiements_post = []
             for p in data.get("paiements_post", []):
                 st.session_state.paiements_post.append({"date": datetime.strptime(p["date"], "%Y-%m-%d").date(), "montant": p["montant"]})
-            
             st.session_state.loaded_loyer = data.get("loyer", 0.0)
             st.success("Dossier chargé !")
         except:
@@ -226,7 +230,6 @@ with st.sidebar:
 
 st.title("🏛️ Gestionnaire Créance - Propriétaires Albion")
 
-# --- INPUT GLOBAL ---
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
     def_loyer = st.session_state.get("loaded_loyer", 0.0)
@@ -236,7 +239,7 @@ with col_loyer:
 
 with col_save:
     if loyer_ht > 0:
-        st.write("") # Spacer
+        st.write("") 
         st.write("") 
         save_data = {
             'loyer': loyer_ht, 
@@ -256,10 +259,8 @@ tab1, tab2 = st.tabs(["🔒 1. DÉCLARATION (Dettes Anciennes)", "🔄 2. SUIVI 
 # ONGLET 1 : ANCIEN SYSTÈME (PRÉ-RJ)
 # ==========================================
 with tab1:
-    # CONTENEUR VISUEL BLEU POUR MARQUER LA DIFFERENCE
     st.info("### 🟦 ESPACE DÉCLARATION DE CRÉANCE\n\nConcerne uniquement les loyers et dettes **AVANT le jugement (26 Juin 2025)**.")
     
-    # --- RESTAURATION DES TEXTES LEGAUX (ACCORDEONS) ---
     col_legal_1, col_legal_2 = st.columns(2)
     with col_legal_1:
         with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=True):
@@ -284,7 +285,7 @@ with tab1:
     with c1:
         st.markdown("#### Saisie des Paiements (Passé)")
         with st.form("ajout_pre"):
-            d_p = st.date_input("Date du Virement", date(2024, 1, 1), format="DD/MM/YYYY") # Format FR
+            d_p = st.date_input("Date du Virement", date(2024, 1, 1), format="DD/MM/YYYY") 
             m_p = st.number_input("Montant TTC (€)", step=100.0)
             if st.form_submit_button("Ajouter à la liste"):
                 if d_p > DATE_JUGEMENT:
@@ -294,14 +295,12 @@ with tab1:
                     st.rerun()
         
         if st.session_state.paiements_pre:
-            # Affichage FR dans le tableau
             st.dataframe(pd.DataFrame(st.session_state.paiements_pre).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
             if st.button("🗑️ Effacer Liste Avant RJ"):
                 st.session_state.paiements_pre = []
                 st.rerun()
 
     with c2:
-        # CALCUL WATERFALL
         echeances = generer_loyers_theoriques_pre_rj(loyer_ht)
         events = []
         nb_echeances = 0
@@ -338,7 +337,6 @@ with tab1:
         if last_date < DATE_JUGEMENT and solde_princ > 0:
             solde_int += calculer_interets_ligne(solde_princ, last_date, DATE_JUGEMENT)
         
-        # Totaux
         princ_net = max(0, solde_princ)
         int_net = max(0, solde_int)
         indemnite = nb_echeances * INDEMNITE_FORFAITAIRE
@@ -350,7 +348,6 @@ with tab1:
         cols[1].metric("Intérêts (Chiro.)", f"{int_net:,.2f} €")
         cols[2].metric("Indemnités (Chiro.)", f"{indemnite:,.2f} €")
         
-        # --- RESTAURATION DU GRAPHIQUE ---
         st.write("---")
         if data_detail:
             df_final = pd.DataFrame(data_detail)
@@ -366,9 +363,7 @@ with tab1:
                 tooltip=['Date', 'Type', 'Montant (€)']
             )
             st.altair_chart(chart.interactive(), use_container_width=True)
-        # ---------------------------------
 
-        # PDF GENERATION
         pdf = PDFDeclaration()
         pdf.add_page()
         pdf.set_font("Arial", '', 10)
@@ -388,7 +383,6 @@ with tab1:
             pdf.cell(25, 6, f"{row['Credit']:.2f}", 1, 0, 'R')
             pdf.cell(25, 6, f"{row['R_Princ']:.2f}", 1, 1, 'R')
             
-        # Signature
         pdf.ln(10)
         pdf.set_font("Arial", '', 10)
         if pdf.get_y() > 240: pdf.add_page()
@@ -404,15 +398,14 @@ with tab1:
 # ONGLET 2 : NOUVEAU SYSTÈME (POST-RJ)
 # ==========================================
 with tab2:
-    # CONTENEUR VISUEL ORANGE POUR ALERTER
-    st.warning("### 🟧 ESPACE SUIVI & MISE EN DEMEURE (Post-Jugement)\n\nConcerne les loyers courants **APRÈS le 26 Juin 2025**. (Art L.622-17 : Paiement au comptant).")
+    st.warning("### 🟧 ESPACE SUIVI & MISE EN DEMEURE (Post-Jugement)\n\nConcerne les loyers courants **APRÈS le 26 Juin 2025**. (Payable à Terme Échu = Le mois suivant le trimestre).")
     
     col_p1, col_p2 = st.columns([1, 2])
     
     with col_p1:
         st.markdown("#### Saisie Paiements Reçus (Futur)")
         with st.form("ajout_post"):
-            d_p_post = st.date_input("Date du Virement", date.today(), format="DD/MM/YYYY") # Format FR
+            d_p_post = st.date_input("Date du Virement", date.today(), format="DD/MM/YYYY") 
             m_p_post = st.number_input("Montant Reçu (€)", step=100.0)
             if st.form_submit_button("Ajouter Paiement Admin."):
                 if d_p_post <= DATE_JUGEMENT:
@@ -422,16 +415,13 @@ with tab2:
                     st.rerun()
         
         if st.session_state.paiements_post:
-            # Affichage FR
             st.dataframe(pd.DataFrame(st.session_state.paiements_post).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
             if st.button("🗑️ Effacer Liste Post RJ"):
                 st.session_state.paiements_post = []
                 st.rerun()
 
     with col_p2:
-        # Calcul Post RJ
         echeances_post = generer_loyers_post_rj(loyer_ht)
-        
         total_du_post = 0
         detail_post = []
         
@@ -442,13 +432,10 @@ with tab2:
         
         table_rows = []
         for ech in echeances_post:
-            # Est-ce échu ?
             is_echu = ech["date"] <= today
             statut = "🔴 À PAYER" if is_echu else "⚪ À venir"
-            
             if is_echu:
                 total_du_post += ech["montant"]
-            
             table_rows.append({
                 "Échéance": ech["date"],
                 "Libellé": ech["label"],
@@ -457,7 +444,6 @@ with tab2:
             })
             
         df_post = pd.DataFrame(table_rows)
-        # Affichage FR dans le tableau
         st.dataframe(df_post.style.format({"Montant": "{:.2f} €", "Échéance": lambda t: t.strftime("%d/%m/%Y")}))
         
         reste_a_payer_post = total_du_post - total_paye_post
@@ -471,7 +457,6 @@ with tab2:
         if reste_a_payer_post > 0:
             st.error(f"L'administrateur vous doit {reste_a_payer_post:,.2f} € immédiatement.")
             
-            # GENERATION LETTRE RELANCE
             pdf_r = PDFRelance()
             pdf_r.add_page()
             pdf_r.set_font("Arial", '', 10)
@@ -487,7 +472,7 @@ with tab2:
             txt_intro = ("Maitre,\n\n"
                          "En ma qualite de bailleur (Lot 6 - Hotel Albion), je vous sollicite concernant le paiement "
                          "des loyers courus depuis le jugement d'ouverture du 26/06/2025.\n\n"
-                         "Conformement a l'article L.622-17 du Code de commerce, ces creances sont payables a leur echeance.\n"
+                         "Conformement a l'article L.622-17 du Code de commerce, ces creances sont payables a leur echeance (Terme Echu).\n"
                          "A ce jour, je constate un impaye de :")
             pdf_r.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
             
