@@ -78,7 +78,6 @@ def generer_loyers_theoriques(loyer_annuel_ht):
 
     # 1. ANNEE 2019 (3 mois offerts Juin-Aout -> Reste Sept-Dec)
     montant_mensuel = loyer_base_mensuel
-    # On compte Oct/Nov/Dec + Septembre.
     echeances.append({
         "date": date(2019, 10, 10), 
         "label": "Loyer 2019 (4 mois TTC)", 
@@ -88,13 +87,12 @@ def generer_loyers_theoriques(loyer_annuel_ht):
     # 2. ANNEE 2020
     echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": montant_mensuel * 3})
     loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
-    # T2 Mixte (Avril Mai base / Juin indexé)
     montant_t2_mixte = (montant_mensuel * 2) + (loyer_2020 * 1)
     echeances.append({"date": date(2020, 4, 10), "label": "T2 2020 (Mixte)", "montant": montant_t2_mixte})
     echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
     echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
 
-    # 3. ANNEE 2021 (Clause sauvegarde)
+    # 3. ANNEE 2021
     loyer_2021 = loyer_2020
     echeances.append({"date": date(2021, 1, 10), "label": "T1 2021", "montant": loyer_2021 * 3})
     echeances.append({"date": date(2021, 4, 10), "label": "T2 2021", "montant": loyer_2021 * 3})
@@ -180,7 +178,6 @@ with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres (Cliquez ici)"
     **3. Les Intérêts de Retard (Créance Chirographaire)**
     * L'argent a un coût. Le Code de Commerce impose des pénalités entre professionnels.
     * Le taux appliqué ici est le taux légal (Refi BCE + 10 points), soit environ 13-14% par an.
-    * *Note :* Chaque virement que vous avez reçu vient d'abord "effacer" des intérêts avant de rembourser le loyer. L'outil fait ce calcul complexe pour vous.
     """)
 
 # SESSION STATE
@@ -199,7 +196,8 @@ with col_left:
     st.info("Ajoutez ici chaque virement reçu **AVANT le 26/06/2025**.")
     
     with st.form("ajout_paiement"):
-        d_paiement = st.date_input("Date du virement", value=date(2024, 1, 1))
+        # MODIFICATION ICI : Format JJ/MM/AAAA (DD/MM/YYYY)
+        d_paiement = st.date_input("Date du virement", value=date(2024, 1, 1), format="DD/MM/YYYY")
         m_paiement = st.number_input("Montant Reçu TTC (€)", min_value=0.0, step=10.0)
         submit = st.form_submit_button("Ajouter ce paiement")
         
@@ -215,7 +213,13 @@ with col_left:
         st.write("---")
         st.write("**Historique des virements saisis :**")
         p_df = pd.DataFrame(st.session_state.paiements)
-        st.dataframe(p_df.style.format({"montant": "{:.2f} € TTC"}))
+        
+        # MODIFICATION ICI : Affichage de la date en JJ/MM/AAAA dans le petit tableau
+        st.dataframe(p_df.style.format({
+            "montant": "{:.2f} € TTC",
+            "date": lambda t: t.strftime("%d/%m/%Y")
+        }))
+        
         if st.button("🗑️ Effacer tous les paiements"):
             st.session_state.paiements = []
             st.rerun()
@@ -266,7 +270,6 @@ if loyer_ht > 0:
     # TOTAUX
     principal_net = total_principal_du - total_paye
     interets_net = total_interets_du - total_interets_paye
-    # Sécurité pour ne pas avoir d'intérêts négatifs si trop perçu (rare)
     if interets_net < 0: interets_net = 0
     
     total_creance = principal_net + interets_net
@@ -289,7 +292,13 @@ if loyer_ht > 0:
         st.success(f"### 💰 TOTAL À DÉCLARER : {total_creance:,.2f} €")
         
         with st.expander("Voir le détail ligne par ligne"):
-            st.dataframe(df_final.style.format({"Débit (TTC)": "{:.2f}", "Crédit (TTC)": "{:.2f}", "Intérêts": "{:.2f}"}))
+            # MODIFICATION ICI : Formatage complet du tableau de résultats (Date FR + Montants)
+            st.dataframe(df_final.style.format({
+                "Débit (TTC)": "{:.2f}", 
+                "Crédit (TTC)": "{:.2f}", 
+                "Intérêts": "{:.2f}",
+                "Date": lambda t: t.strftime("%d/%m/%Y")
+            }))
 
     # --- GÉNÉRATION PDF ---
     pdf = PDF()
@@ -332,6 +341,7 @@ if loyer_ht > 0:
     
     pdf.set_font("Arial", size=8)
     for index, row in df_final.iterrows():
+        # MODIFICATION ICI : Formatage de la date en FR pour le PDF
         d_str = row['Date'].strftime("%d/%m/%Y")
         pdf.cell(25, 6, d_str, 1)
         pdf.cell(60, 6, str(row['Libellé']), 1)
