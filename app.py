@@ -304,7 +304,8 @@ with tab1:
     
     col_legal_1, col_legal_2 = st.columns(2)
     with col_legal_1:
-        with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=True):
+        # --- MODIFICATION ICI : expanded=False ---
+        with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=False):
              st.markdown("""
             **1. Méthode "Waterfall" (Art. 1343-1 C. Civil) :**
             Les paiements remboursent **d'abord les intérêts**, puis le capital.
