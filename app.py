@@ -9,6 +9,52 @@ import json
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️", layout="wide")
 
+# --- CSS PERSONNALISÉ (EFFET INTERCALAIRES) ---
+st.markdown("""
+<style>
+    /* Style général des onglets */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px; /* Espace entre les onglets */
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        height: 60px; /* Hauteur plus importante */
+        white-space: pre-wrap;
+        border-radius: 10px 10px 0px 0px; /* Arrondi haut comme un dossier */
+        padding: 10px 20px;
+        font-size: 18px; /* Texte plus gros */
+        box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-bottom: none;
+    }
+
+    /* Onglet 1 : DÉCLARATION (BLEU) */
+    .stTabs [data-baseweb="tab"]:nth-of-type(1) {
+        border-top: 6px solid #1f77b4; /* Bandeau Bleu */
+    }
+    
+    /* Onglet 2 : SUIVI (ORANGE) */
+    .stTabs [data-baseweb="tab"]:nth-of-type(2) {
+        border-top: 6px solid #ff7f0e; /* Bandeau Orange */
+    }
+
+    /* Onglet Actif (Celui sélectionné) */
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important;
+        font-weight: bold;
+        border-bottom: 0px solid transparent;
+        box-shadow: none;
+    }
+    
+    /* Onglet Inactif (Hover) */
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #e9ecef;
+        color: #000;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- CONSTANTES JURIDIQUES & DONNÉES ---
 DATE_JUGEMENT = date(2025, 6, 26)
 DATE_DEBUT_GRAPH = date(2019, 6, 1)
@@ -248,7 +294,7 @@ if loyer_ht == 0:
     st.stop()
 
 # --- ONGLETS (TABS) ---
-tab1, tab2 = st.tabs(["🔒 1. DÉCLARATION (Dettes Anciennes)", "🔄 2. SUIVI LOYERS (Après RJ)"])
+tab1, tab2 = st.tabs(["1. 🔒 DÉCLARATION (Dettes Anciennes)", "2. 🔄 SUIVI LOYERS (Après RJ)"])
 
 # ==========================================
 # ONGLET 1 : ANCIEN SYSTÈME (PRÉ-RJ)
@@ -460,7 +506,7 @@ with tab2:
             
         df_post = pd.DataFrame(table_rows)
 
-        # FONCTION DE STYLE POUR LES PASTILLES
+        # FONCTION DE STYLE POUR LES PASTILLES DE COULEUR
         def highlight_status(val):
             if "PAYÉ" in val:
                 return 'background-color: #d4edda; color: #155724; font-weight: bold' # Vert
@@ -472,7 +518,7 @@ with tab2:
                 return 'color: #6c757d'
             return ''
 
-        # AFFICHAGE AVEC STYLE
+        # AFFICHAGE DU TABLEAU STYLISÉ
         st.dataframe(df_post.style.format({
             "Montant": "{:.2f} €", 
             "Payé": "{:.2f} €", 
