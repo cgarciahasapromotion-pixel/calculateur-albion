@@ -12,19 +12,46 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 # --- CSS PERSONNALISÉ (EFFET INTERCALAIRES) ---
 st.markdown("""
 <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    /* Style général des onglets */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px; 
+    }
+
     .stTabs [data-baseweb="tab"] {
-        height: 60px; white-space: pre-wrap; border-radius: 10px 10px 0px 0px;
-        padding: 10px 20px; font-size: 18px; box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
-        background-color: #f8f9fa; border: 1px solid #dee2e6; border-bottom: none;
+        height: 60px; 
+        white-space: pre-wrap;
+        border-radius: 10px 10px 0px 0px; 
+        padding: 10px 20px;
+        font-size: 18px; 
+        box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-bottom: none;
     }
-    .stTabs [data-baseweb="tab"]:nth-of-type(1) { border-top: 6px solid #1f77b4; }
-    .stTabs [data-baseweb="tab"]:nth-of-type(2) { border-top: 6px solid #ff7f0e; }
+
+    /* Onglet 1 : DÉCLARATION (BLEU) */
+    .stTabs [data-baseweb="tab"]:nth-of-type(1) {
+        border-top: 6px solid #1f77b4; 
+    }
+    
+    /* Onglet 2 : SUIVI (ORANGE) */
+    .stTabs [data-baseweb="tab"]:nth-of-type(2) {
+        border-top: 6px solid #ff7f0e; 
+    }
+
+    /* Onglet Actif */
     .stTabs [aria-selected="true"] {
-        background-color: #ffffff !important; font-weight: bold;
-        border-bottom: 0px solid transparent; box-shadow: none;
+        background-color: #ffffff !important;
+        font-weight: bold;
+        border-bottom: 0px solid transparent;
+        box-shadow: none;
     }
-    .stTabs [data-baseweb="tab"]:hover { background-color: #e9ecef; color: #000; }
+    
+    /* Onglet Inactif (Hover) */
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #e9ecef;
+        color: #000;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -125,12 +152,11 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
 
     return echeances
 
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT) ---
+# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - TERME ÉCHU) ---
 def generer_loyers_post_rj(loyer_annuel_ht):
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
-    
     echeances = []
     
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
@@ -145,10 +171,8 @@ def generer_loyers_post_rj(loyer_annuel_ht):
 class PDFDeclaration(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
-        # Encodage latin-1 manuel pour éviter les erreurs
         txt_titre = 'Declaration de Creance - HOTEL ALBION'
         self.cell(0, 10, txt_titre.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        
         self.set_font('Arial', 'I', 9)
         txt_sous = '(Calcul certifie selon Art. 1343-1 Code Civil)'
         self.cell(0, 5, txt_sous.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
@@ -309,14 +333,12 @@ with tab1:
             montant = ev["montant"]
             if ev["type"] == "LOYER":
                 solde_princ += montant
-                # Important : Imp_Princ = 0 sur une ligne de loyer
                 data_detail.append({"Date": curr, "Lib": ev["label"], "Debit": montant, "Credit": 0, "Imp_Princ": 0.0, "R_Princ": solde_princ, "R_Int": solde_int})
             else:
                 imp_int = min(montant, solde_int)
                 solde_int -= imp_int
                 imp_princ = montant - imp_int
                 solde_princ -= imp_princ
-                # Important : On stocke l'imputation négative pour l'affichage
                 data_detail.append({"Date": curr, "Lib": "Paiement", "Debit": 0, "Credit": montant, "Imp_Princ": -imp_princ, "R_Princ": solde_princ, "R_Int": solde_int})
             last_date = curr
             
@@ -350,16 +372,14 @@ with tab1:
             )
             st.altair_chart(chart.interactive(), use_container_width=True)
 
-        # --- GÉNÉRATION PDF ROBUSTE (STYLE ORIGINAL) ---
+        # GENERATION PDF
         pdf = PDFDeclaration()
         pdf.add_page()
         pdf.set_font("Arial", size=10)
         
-        # En-tête info
         pdf.cell(0, 8, f"Arret des comptes au : 26/06/2025 (Jugement RJ)", 0, 1)
         pdf.cell(0, 8, f"Base Loyer Annuel : {loyer_ht:,.2f} EUR HT", 0, 1)
         
-        # Encart Juridique Gris
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 10)
         pdf.set_fill_color(240, 240, 240)
@@ -370,7 +390,6 @@ with tab1:
                      "et subsidiairement sur le capital (Loyer).")
         pdf.multi_cell(0, 5, note_text.encode('latin-1', 'replace').decode('latin-1'), 1)
         
-        # Tableau Synthèse
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(100, 10, "TOTAL GENERAL A DECLARER", 1)
@@ -384,7 +403,6 @@ with tab1:
         pdf.cell(100, 8, f"- Dont Indemnites Recouvrement (x{nb_echeances})", 1)
         pdf.cell(50, 8, f"{indemnite:,.2f} EUR", 1, 1, 'R')
 
-        # Tableau des Paiements (RESTORED)
         if st.session_state.paiements_pre:
             pdf.ln(8)
             pdf.set_font("Arial", 'B', 10)
@@ -405,19 +423,17 @@ with tab1:
             pdf.cell(40, 6, "TOTAL PERCU", 1)
             pdf.cell(40, 6, f"{total_p_pdf:.2f} EUR", 1, 1, 'R')
 
-        # Tableau Détail (AVEC COLONNES COMPLÈTES)
         pdf.ln(8)
         pdf.set_font("Arial", 'B', 10)
         pdf.cell(0, 8, "DETAIL DES IMPUTATIONS (HISTORIQUE)", 0, 1)
         
         pdf.set_font("Arial", 'B', 8)
-        # Largeurs ajustées pour A4
         w_date = 20; w_lib = 60; w_num = 22
         pdf.cell(w_date, 8, "Date", 1)
         pdf.cell(w_lib, 8, "Libelle", 1)
         pdf.cell(w_num, 8, "Debit", 1)
         pdf.cell(w_num, 8, "Credit", 1)
-        pdf.cell(w_num, 8, "Imp. Princ.", 1) # Colonne cruciale
+        pdf.cell(w_num, 8, "Imp. Princ.", 1) 
         pdf.cell(w_num, 8, "Solde Princ.", 1)
         pdf.cell(w_num, 8, "Solde Int.", 1, 1)
         
@@ -430,11 +446,10 @@ with tab1:
             pdf.cell(w_lib, 6, libelle[:30], 1)
             pdf.cell(w_num, 6, f"{row['Debit']:.2f}", 1, 0, 'R')
             pdf.cell(w_num, 6, f"{row['Credit']:.2f}", 1, 0, 'R')
-            pdf.cell(w_num, 6, f"{row['Imp_Princ']:.2f}", 1, 0, 'R') # Affichage imputation
+            pdf.cell(w_num, 6, f"{row['Imp_Princ']:.2f}", 1, 0, 'R') 
             pdf.cell(w_num, 6, f"{row['R_Princ']:.2f}", 1, 0, 'R')
             pdf.cell(w_num, 6, f"{row['R_Int']:.2f}", 1, 1, 'R')
 
-        # Signature
         pdf.ln(10)
         pdf.set_font("Arial", '', 10)
         if pdf.get_y() > 240: pdf.add_page()
@@ -452,6 +467,16 @@ with tab1:
         pdf.multi_cell(0, 5, reserve_txt.encode('latin-1', 'replace').decode('latin-1'), 0, 'C')
         
         st.download_button("📄 TÉLÉCHARGER PDF DÉCLARATION (COMPLET)", pdf.output(dest='S').encode('latin-1'), "declaration_creance_albion.pdf", "application/pdf")
+
+        # --- APPEL A L'ACTION VERS ONGLET 2 (MODIFICATION DEMANDÉE) ---
+        st.success("✅ **Étape 1 terminée !**")
+        st.markdown("""
+        ⚠️ **ATTENTION : Ce n'est pas fini !**
+        Vous avez calculé la dette ancienne (avant RJ). 
+        Il est probable que l'administrateur vous doive aussi des loyers pour la période actuelle (depuis juin).
+        
+        👉 **Cliquez sur l'Onglet 2 tout en haut de la page : '🔄 2. SUIVI LOYERS (Après RJ)' pour vérifier.**
+        """)
 
 
 # ==========================================
