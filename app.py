@@ -73,8 +73,6 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
 
 # --- MOTEUR 1 : PRÉ-RJ (DÉCLARATION) ---
 def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
-    # NOTE : Pour la déclaration de créance (passif), on déclare la dette d'occupation
-    # arrêtée au jour du jugement, peu importe la date de paiement théorique.
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     echeances = []
@@ -130,43 +128,38 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
 
     return echeances
 
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - TERME ÉCHU) ---
+# --- MOTEUR 2 : POST-RJ (SUIVI COURANT) ---
 def generer_loyers_post_rj(loyer_annuel_ht):
-    """Génère les loyers à partir du 27/06/2025 (PAYABLES À TERME ÉCHU)"""
+    """Génère les loyers à partir du 27/06/2025 (Terme Échu)"""
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
-    # Loyer provisionnel (Dernier indice connu)
     loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
     
     echeances = []
     
-    # 1. Solde Juin 2025 (27 au 30 juin)
-    # T2 (Avril-Mai-Juin) payable terme échu -> Juillet.
+    # 1. Solde Juin 2025 (Payable Juillet)
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
     echeances.append({
-        "date": date(2025, 7, 10), # Exigible en Juillet
+        "date": date(2025, 7, 10),
         "label": "Solde Juin 2025 (Payable Juillet)",
         "montant": montant_fin_juin
     })
     
-    # 2. T3 2025 (Juillet - Aout - Septembre)
-    # Terme échu -> Payable en OCTOBRE
+    # 2. T3 2025 (Payable Octobre)
     echeances.append({
-        "date": date(2025, 10, 10), # Exigible le 10 Octobre
+        "date": date(2025, 10, 10),
         "label": "T3 2025 (Payable Octobre)",
         "montant": loyer_mensuel_2025 * 3
     })
     
-    # 3. T4 2025 (Octobre - Nov - Dec)
-    # Terme échu -> Payable en JANVIER 2026
+    # 3. T4 2025 (Payable Janvier 26)
     echeances.append({
-        "date": date(2026, 1, 10), # Exigible le 10 Janvier 2026
+        "date": date(2026, 1, 10),
         "label": "T4 2025 (Payable Janvier 26)",
         "montant": loyer_mensuel_2025 * 3
     })
     
-    # 4. T1 2026 (Provisionnel)
-    # Terme échu -> Payable en AVRIL 2026
+    # 4. T1 2026 (Payable Avril 26)
     echeances.append({
         "date": date(2026, 4, 10),
         "label": "T1 2026 (Payable Avril 26)",
@@ -278,11 +271,9 @@ with tab1:
             st.markdown("**Indices ILC**")
             st.dataframe(pd.DataFrame(list(INDICES.items()), columns=["Année", "Indice"]), hide_index=True)
             
-            # --- AJOUT DU TABLEAU DES TAUX ICI ---
             st.markdown("**Taux Intérêts (BCE + 10pts)**")
             data_taux = [{"Date": d.strftime("%d/%m/%Y"), "Taux": f"{t:.2f} %"} for d, t in TAUX_LEGAUX]
             st.dataframe(pd.DataFrame(data_taux), hide_index=True)
-            # -------------------------------------
 
     st.write("---")
 
@@ -427,40 +418,62 @@ with tab2:
 
     with col_p2:
         echeances_post = generer_loyers_post_rj(loyer_ht)
-        total_du_post = 0
-        detail_post = []
         
-        st.markdown("#### État des lieux (Loyers Courants)")
-        
-        today = date.today()
-        total_paye_post = sum(p["montant"] for p in st.session_state.paiements_post)
+        # ALGORITHME D'IMPUTATION (Lettrage)
+        solde_disponible = sum(p["montant"] for p in st.session_state.paiements_post)
         
         table_rows = []
+        today = date.today()
+        total_a_reclamer_immediatement = 0
+        
+        st.markdown("#### État des lieux (Imputation Chronologique)")
+        
         for ech in echeances_post:
-            is_echu = ech["date"] <= today
-            statut = "🔴 À PAYER" if is_echu else "⚪ À venir"
-            if is_echu:
-                total_du_post += ech["montant"]
+            montant_du = ech["montant"]
+            
+            # Combien on peut payer avec le solde ?
+            paye_sur_cette_ech = min(montant_du, solde_disponible)
+            solde_disponible -= paye_sur_cette_ech
+            reste_a_payer = montant_du - paye_sur_cette_ech
+            
+            # Statut
+            if reste_a_payer == 0:
+                statut = "🟢 PAYÉ"
+            elif paye_sur_cette_ech > 0:
+                statut = "🟠 PARTIEL"
+            else:
+                # Si rien payé, est-ce que la date est passée ?
+                if ech["date"] <= today:
+                    statut = "🔴 IMPAYÉ"
+                else:
+                    statut = "⚪ À ÉCHOIR"
+            
+            # Calcul de ce qu'on peut réclamer juridiquement (uniquement si échu)
+            if ech["date"] <= today:
+                total_a_reclamer_immediatement += reste_a_payer
+
             table_rows.append({
                 "Échéance": ech["date"],
                 "Libellé": ech["label"],
-                "Montant": ech["montant"],
+                "Montant": montant_du,
+                "Payé": paye_sur_cette_ech,
+                "Reste Dû": reste_a_payer,
                 "Statut": statut
             })
             
         df_post = pd.DataFrame(table_rows)
-        st.dataframe(df_post.style.format({"Montant": "{:.2f} €", "Échéance": lambda t: t.strftime("%d/%m/%Y")}))
-        
-        reste_a_payer_post = total_du_post - total_paye_post
+        st.dataframe(df_post.style.format({
+            "Montant": "{:.2f} €", 
+            "Payé": "{:.2f} €", 
+            "Reste Dû": "{:.2f} €", 
+            "Échéance": lambda t: t.strftime("%d/%m/%Y")
+        }))
         
         st.write("---")
-        c_res1, c_res2, c_res3 = st.columns(3)
-        c_res1.metric("Total Échu (Dû)", f"{total_du_post:,.2f} €")
-        c_res2.metric("Total Reçu (Admin)", f"{total_paye_post:,.2f} €")
-        c_res3.metric("⚠️ RESTE À RÉCLAMER", f"{max(0, reste_a_payer_post):,.2f} €", delta_color="inverse")
+        st.metric("⚠️ TOTAL IMPAYÉ EXIGIBLE (Mise en demeure)", f"{total_a_reclamer_immediatement:,.2f} €", delta_color="inverse")
         
-        if reste_a_payer_post > 0:
-            st.error(f"L'administrateur vous doit {reste_a_payer_post:,.2f} € immédiatement.")
+        if total_a_reclamer_immediatement > 0:
+            st.error(f"L'administrateur vous doit {total_a_reclamer_immediatement:,.2f} € immédiatement.")
             
             pdf_r = PDFRelance()
             pdf_r.add_page()
@@ -478,30 +491,30 @@ with tab2:
                          "En ma qualite de bailleur (Lot 6 - Hotel Albion), je vous sollicite concernant le paiement "
                          "des loyers courus depuis le jugement d'ouverture du 26/06/2025.\n\n"
                          "Conformement a l'article L.622-17 du Code de commerce, ces creances sont payables a leur echeance (Terme Echu).\n"
-                         "A ce jour, je constate un impaye de :")
+                         "A ce jour, apres imputation des versements recus, je constate un solde impaye exigible de :")
             pdf_r.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
             
             pdf_r.ln(5)
             pdf_r.set_font("Arial", 'B', 12)
-            pdf_r.cell(0, 10, f"MONTANT RECLAME : {reste_a_payer_post:,.2f} EUR", 0, 1, 'C')
+            pdf_r.cell(0, 10, f"NET A PAYER : {total_a_reclamer_immediatement:,.2f} EUR", 0, 1, 'C')
             
             pdf_r.ln(5)
             pdf_r.set_font("Arial", 'B', 9)
-            pdf_r.cell(0, 5, "DETAIL DES ECHEANCES ECHUES NON REGLEES :", 0, 1)
+            pdf_r.cell(0, 5, "DETAIL DES ECHEANCES:", 0, 1)
             
             pdf_r.set_font("Arial", '', 9)
-            pdf_r.cell(30, 6, "Date", 1)
-            pdf_r.cell(80, 6, "Libelle", 1)
-            pdf_r.cell(30, 6, "Montant", 1, 1)
+            pdf_r.cell(30, 6, "Echeance", 1)
+            pdf_r.cell(70, 6, "Libelle", 1)
+            pdf_r.cell(30, 6, "Montant", 1)
+            pdf_r.cell(30, 6, "Reste Du", 1, 1)
             
             for row in table_rows:
-                if row["Statut"] == "🔴 À PAYER":
+                # On affiche tout pour information, mais on met en évidence ce qui est dû
+                if row["Statut"] in ["🔴 IMPAYÉ", "🟠 PARTIEL"] and row["Reste Dû"] > 0.01:
                     pdf_r.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
-                    pdf_r.cell(80, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
-                    pdf_r.cell(30, 6, f"{row['Montant']:.2f}", 1, 1, 'R')
-            
-            pdf_r.ln(5)
-            pdf_r.cell(0, 5, f"Total verse par vos soins a ce jour : {total_paye_post:,.2f} EUR", 0, 1)
+                    pdf_r.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
+                    pdf_r.cell(30, 6, f"{row['Montant']:.2f}", 1, 0, 'R')
+                    pdf_r.cell(30, 6, f"{row['Reste Dû']:.2f}", 1, 1, 'R')
             
             pdf_r.ln(10)
             pdf_r.multi_cell(0, 5, "Je vous demande de proceder au reglement sans delai.\nSignature : ..................................")
@@ -509,4 +522,7 @@ with tab2:
             st.download_button("📩 TÉLÉCHARGER LETTRE DE RELANCE", pdf_r.output(dest='S').encode('latin-1'), "relance_loyers_post_rj.pdf", "application/pdf")
         
         else:
-            st.success("✅ Tous les loyers courants sont à jour.")
+            if solde_disponible > 0:
+                st.success(f"✅ Loyers à jour ! Vous avez même une avance de {solde_disponible:,.2f} €.")
+            else:
+                st.success("✅ Tous les loyers exigibles sont réglés.")
