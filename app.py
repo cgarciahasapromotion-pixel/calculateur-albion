@@ -304,7 +304,6 @@ with tab1:
     
     col_legal_1, col_legal_2 = st.columns(2)
     with col_legal_1:
-        # --- MODIFICATION ICI : expanded=False ---
         with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=False):
              st.markdown("""
             **1. Méthode "Waterfall" (Art. 1343-1 C. Civil) :**
@@ -347,6 +346,25 @@ with tab1:
                 st.rerun()
 
     with c2:
+        # --- LOGIQUE DE MASQUAGE CONDITIONNEL (UX) ---
+        has_paiements = len(st.session_state.paiements_pre) > 0
+        
+        if not has_paiements:
+            # Panneau d'attente
+            st.info("👋 **En attente de vos données...**")
+            st.markdown("""
+            Pour calculer votre créance exacte, l'outil doit connaître vos encaissements.
+            
+            1. **Saisissez vos virements reçus** dans le formulaire à gauche.
+            2. **OU** cochez la case ci-dessous si vous n'avez **rien reçu**.
+            """)
+            
+            no_payment_check = st.checkbox("Je certifie n'avoir reçu AUCUN paiement (Impayé total)", key="check_no_pay_pre")
+            
+            if not no_payment_check:
+                st.stop() # On arrête l'affichage ici tant que rien n'est fait
+
+        # SI ON ARRIVE ICI : Soit des paiements, soit case cochée
         echeances = generer_loyers_theoriques_pre_rj(loyer_ht)
         events = []
         nb_echeances = 0
@@ -467,6 +485,17 @@ with tab2:
                 st.rerun()
 
     with col_p2:
+        # --- LOGIQUE MASQUAGE CONDITIONNEL POST-RJ ---
+        has_paiements_post = len(st.session_state.paiements_post) > 0
+        
+        if not has_paiements_post:
+             st.info("👋 **Aucun paiement Admin saisi.**")
+             st.markdown("Veuillez saisir les virements reçus de l'Administrateur Judiciaire (s'il y en a) pour voir l'état des lieux.")
+             no_pay_check_post = st.checkbox("Je n'ai rien reçu depuis le jugement", key="check_no_pay_post")
+             
+             if not no_pay_check_post:
+                 st.stop()
+
         echeances_post = generer_loyers_post_rj(loyer_ht)
         
         solde_disponible = sum(p["montant"] for p in st.session_state.paiements_post)
