@@ -73,6 +73,8 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
 
 # --- MOTEUR 1 : PRÉ-RJ (DÉCLARATION) ---
 def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
+    # NOTE : Pour la déclaration de créance (passif), on déclare la dette d'occupation
+    # arrêtée au jour du jugement, peu importe la date de paiement théorique.
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     echeances = []
@@ -128,11 +130,12 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
 
     return echeances
 
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT) ---
+# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - TERME ÉCHU) ---
 def generer_loyers_post_rj(loyer_annuel_ht):
-    """Génère les loyers à partir du 27/06/2025 (Terme Échu)"""
+    """Génère les loyers à partir du 27/06/2025 (PAYABLES À TERME ÉCHU)"""
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
+    # Loyer provisionnel (Dernier indice connu)
     loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
     
     echeances = []
@@ -140,7 +143,7 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     # 1. Solde Juin 2025 (Payable Juillet)
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
     echeances.append({
-        "date": date(2025, 7, 10),
+        "date": date(2025, 7, 10), # Exigible en Juillet
         "label": "Solde Juin 2025 (Payable Juillet)",
         "montant": montant_fin_juin
     })
@@ -419,7 +422,6 @@ with tab2:
     with col_p2:
         echeances_post = generer_loyers_post_rj(loyer_ht)
         
-        # ALGORITHME D'IMPUTATION (Lettrage)
         solde_disponible = sum(p["montant"] for p in st.session_state.paiements_post)
         
         table_rows = []
@@ -430,25 +432,20 @@ with tab2:
         
         for ech in echeances_post:
             montant_du = ech["montant"]
-            
-            # Combien on peut payer avec le solde ?
             paye_sur_cette_ech = min(montant_du, solde_disponible)
             solde_disponible -= paye_sur_cette_ech
             reste_a_payer = montant_du - paye_sur_cette_ech
             
-            # Statut
             if reste_a_payer == 0:
                 statut = "🟢 PAYÉ"
             elif paye_sur_cette_ech > 0:
                 statut = "🟠 PARTIEL"
             else:
-                # Si rien payé, est-ce que la date est passée ?
                 if ech["date"] <= today:
                     statut = "🔴 IMPAYÉ"
                 else:
                     statut = "⚪ À ÉCHOIR"
             
-            # Calcul de ce qu'on peut réclamer juridiquement (uniquement si échu)
             if ech["date"] <= today:
                 total_a_reclamer_immediatement += reste_a_payer
 
@@ -462,12 +459,26 @@ with tab2:
             })
             
         df_post = pd.DataFrame(table_rows)
+
+        # FONCTION DE STYLE POUR LES PASTILLES
+        def highlight_status(val):
+            if "PAYÉ" in val:
+                return 'background-color: #d4edda; color: #155724; font-weight: bold' # Vert
+            elif "PARTIEL" in val:
+                return 'background-color: #fff3cd; color: #856404; font-weight: bold' # Orange
+            elif "IMPAYÉ" in val:
+                return 'background-color: #f8d7da; color: #721c24; font-weight: bold' # Rouge
+            elif "ÉCHOIR" in val:
+                return 'color: #6c757d'
+            return ''
+
+        # AFFICHAGE AVEC STYLE
         st.dataframe(df_post.style.format({
             "Montant": "{:.2f} €", 
             "Payé": "{:.2f} €", 
             "Reste Dû": "{:.2f} €", 
             "Échéance": lambda t: t.strftime("%d/%m/%Y")
-        }))
+        }).map(highlight_status, subset=["Statut"]))
         
         st.write("---")
         st.metric("⚠️ TOTAL IMPAYÉ EXIGIBLE (Mise en demeure)", f"{total_a_reclamer_immediatement:,.2f} €", delta_color="inverse")
@@ -509,7 +520,6 @@ with tab2:
             pdf_r.cell(30, 6, "Reste Du", 1, 1)
             
             for row in table_rows:
-                # On affiche tout pour information, mais on met en évidence ce qui est dû
                 if row["Statut"] in ["🔴 IMPAYÉ", "🟠 PARTIEL"] and row["Reste Dû"] > 0.01:
                     pdf_r.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
                     pdf_r.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
