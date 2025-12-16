@@ -147,9 +147,53 @@ class PDF(FPDF):
 
 st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
 
+# --- SECTION PÉDAGOGIQUE (Restaurée) ---
+col_info1, col_info2 = st.columns(2)
+
+with col_info1:
+    with st.expander("📚 MODE D'EMPLOI & DÉFINITIONS", expanded=True):
+        st.markdown("""
+        **1. HT ou TTC ?**
+        * Le bail fixe un loyer **HT (Hors Taxes)**.
+        * L'outil ajoute automatiquement **10% de TVA**.
+        * Le résultat final est affiché en **TTC**, car c'est le montant réel que vous auriez dû recevoir sur votre compte.
+        
+        **2. Principal Net (Créance Privilégiée)**
+        * C'est le "vrai" loyer manquant.
+        * *Calcul :* (Loyers dus) - (Virements reçus).
+        * C'est la priorité absolue de remboursement.
+        
+        **3. Intérêts de Retard (Créance Chirographaire)**
+        * Pénalité légale pour retard de paiement (Art L441-10 du Code de Commerce).
+        * *Taux :* BCE + 10 points (environ 13% à 14% par an).
+        * Ils seront payés après le Principal, s'il reste de l'argent.
+
+        **4. Le Graphique :**
+        * **Bleu :** Évolution de la dette de loyer.
+        * **Rouge :** Évolution des intérêts (l'argent travaille contre eux).
+        """)
+
+with col_info2:
+    with st.expander("📈 TABLEAUX DE RÉFÉRENCE", expanded=False):
+        st.markdown("**Indice ILC (Insee)**")
+        df_ilc_ref = pd.DataFrame([
+            {"Année": "2019", "Valeur": 114.06},
+            {"Année": "2020", "Valeur": 116.16},
+            {"Année": "2021", "Valeur": 115.79},
+            {"Année": "2022", "Valeur": 118.59},
+            {"Année": "2023", "Valeur": 126.05},
+            {"Année": "2024", "Valeur": 132.63},
+            {"Année": "2025", "Valeur": 135.30}
+        ])
+        st.dataframe(df_ilc_ref, hide_index=True)
+        st.markdown("**Taux Intérêt (BCE + 10pts)**")
+        st.caption("Ex: 14.75% au 01/01/2024")
+
 # SESSION STATE
 if 'paiements' not in st.session_state:
     st.session_state.paiements = []
+
+st.write("---")
 
 col_left, col_right = st.columns([1, 2])
 
