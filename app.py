@@ -12,8 +12,7 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 DATE_JUGEMENT = date(2025, 6, 26)
 DATE_DEBUT_GRAPH = date(2019, 6, 1)
 
-# Taux d'intérêt légal (BCE + 10 points)
-# Source : Banque de France pour créances commerciales
+# Taux d'intérêt légal (BCE + 10 points) - Source : Banque de France (L441-10)
 TAUX_LEGAUX = [
     (date(2019, 1, 1), 10.00),
     (date(2019, 7, 1), 10.00),
@@ -41,7 +40,7 @@ INDICES = {
     "2024": 135.30  # T4 2024
 }
 
-# --- FONCTIONS DE CALCUL (MOTEUR) ---
+# --- FONCTIONS MOTEUR ---
 
 def get_taux_legal(d):
     """Trouve le taux applicable pour une date donnée"""
@@ -67,7 +66,6 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
                 next_change = start_date
                 break
         
-        # Nombre de jours dans cette sous-période
         days = (next_change - current_date).days
         
         # Formule : Capital x Taux x (Jours / 365)
@@ -79,21 +77,20 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
     return total_interets
 
 def generer_loyers_theoriques(loyer_annuel_ht):
-    """Génère la liste des loyers qui auraient dû être payés (L'Échéancier)"""
-    # Ajout TVA 10%
+    """Génère la liste des loyers dus (Échéancier théorique)"""
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     
     echeances = []
 
-    # 1. ANNEE 2019 (Prorata ou 4 mois restants)
+    # 1. ANNEE 2019
     echeances.append({
         "date": date(2019, 10, 10), 
         "label": "Loyer 2019 (4 mois TTC)", 
         "montant": loyer_base_mensuel * 4
     })
 
-    # 2. ANNEE 2020 (Base T1, Mixte T2, Indexé ensuite)
+    # 2. ANNEE 2020
     echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": loyer_base_mensuel * 3})
     
     loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
@@ -103,7 +100,7 @@ def generer_loyers_theoriques(loyer_annuel_ht):
     echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
     echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
 
-    # 3. ANNEE 2021 (Clause sauvegarde : baisse indice -> maintien loyer)
+    # 3. ANNEE 2021
     loyer_2021 = loyer_2020
     echeances.append({"date": date(2021, 1, 10), "label": "T1 2021", "montant": loyer_2021 * 3})
     echeances.append({"date": date(2021, 4, 10), "label": "T2 2021", "montant": loyer_2021 * 3})
@@ -134,30 +131,27 @@ def generer_loyers_theoriques(loyer_annuel_ht):
     echeances.append({"date": date(2024, 7, 10), "label": "T3 2024", "montant": loyer_2024 * 3})
     echeances.append({"date": date(2024, 10, 10), "label": "T4 2024", "montant": loyer_2024 * 3})
 
-    # 7. ANNEE 2025 (Jusqu'au RJ)
+    # 7. ANNEE 2025
     echeances.append({"date": date(2025, 1, 10), "label": "T1 2025", "montant": loyer_2024 * 3})
     
     loyer_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
-    # Avril-Mai complets
     montant_avril_mai = loyer_2024 * 2
     echeances.append({"date": date(2025, 4, 10), "label": "Avril-Mai 2025", "montant": montant_avril_mai})
     
-    # Prorata Juin (26 jours)
     montant_juin_prorata = (loyer_2025 / 30) * 26
     echeances.append({"date": date(2025, 6, 26), "label": "Juin 2025 (Prorata 26j)", "montant": montant_juin_prorata})
 
     return echeances
 
-# --- CLASS PDF PERSONNALISÉE ---
+# --- CLASS PDF ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
-        # Encodage latin-1 pour gérer les accents
-        txt = 'Déclaration de Créance - HOTEL ALBION'.encode('latin-1', 'replace').decode('latin-1')
+        txt = 'Declaration de Creance - HOTEL ALBION'.encode('latin-1', 'replace').decode('latin-1')
         self.cell(0, 10, txt, 0, 1, 'C')
         
         self.set_font('Arial', 'I', 10)
-        txt_sub = '(Montants exprimés en TTC - TVA 10% incluse)'.encode('latin-1', 'replace').decode('latin-1')
+        txt_sub = '(Calcul certifie selon Art. 1343-1 Code Civil)'.encode('latin-1', 'replace').decode('latin-1')
         self.cell(0, 10, txt_sub, 0, 1, 'C')
         self.ln(5)
 
@@ -176,43 +170,24 @@ st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
 col_info1, col_info2 = st.columns(2)
 
 with col_info1:
-    with st.expander("📚 MODE D'EMPLOI & DÉFINITIONS", expanded=True):
+    with st.expander("📚 MODE D'EMPLOI", expanded=True):
         st.markdown("""
-        **1. HT ou TTC ?**
-        * Le bail fixe un loyer **HT (Hors Taxes)**.
-        * L'outil ajoute automatiquement **10% de TVA**.
-        * Le résultat final est affiché en **TTC**, à comparer avec vos virements reçus.
+        **1. Renseignez votre Loyer :**
+        Entrez le montant annuel HT inscrit dans votre bail. L'outil gère la TVA.
         
-        **2. Principal Net (Créance Privilégiée)**
-        * C'est le "vrai" loyer manquant (Capital).
-        * *Calcul :* (Loyers dus) - (Virements reçus).
+        **2. Ajoutez les Paiements :**
+        Entrez chaque virement reçu avant la date du jugement (26/06/2025).
         
-        **3. Intérêts de Retard (Créance Chirographaire)**
-        * Pénalité légale (Art L441-10 Commerce).
-        * *Taux :* BCE + 10 points (environ 13% à 14% par an).
-        * Ils s'accumulent chaque jour de retard.
-
-        **4. Le Graphique :**
-        * **Bleu :** Évolution de la dette de loyer.
-        * **Rouge :** Évolution des intérêts cumulés.
+        **3. Téléchargez le PDF :**
+        Il contient le détail légal complet pour le mandataire judiciaire.
         """)
 
 with col_info2:
     with st.expander("📈 TABLEAUX DE RÉFÉRENCE", expanded=False):
-        st.markdown("**Indice ILC (Insee)**")
-        df_ilc_ref = pd.DataFrame([
-            {"Année": "2019", "Valeur": 114.06},
-            {"Année": "2020", "Valeur": 116.16},
-            {"Année": "2021", "Valeur": 115.79},
-            {"Année": "2022", "Valeur": 118.59},
-            {"Année": "2023", "Valeur": 126.05},
-            {"Année": "2024", "Valeur": 132.63},
-            {"Année": "2025", "Valeur": 135.30}
-        ])
-        st.dataframe(df_ilc_ref, hide_index=True)
+        st.markdown("**Indices ILC**")
+        st.dataframe(pd.DataFrame(list(INDICES.items()), columns=["Année/Réf", "Indice"]), hide_index=True)
         
         st.markdown("**Taux Intérêt (BCE + 10pts)**")
-        # --- AJOUT ICI : Génération du tableau des taux ---
         data_taux_display = []
         for d, t in TAUX_LEGAUX:
             data_taux_display.append({
@@ -244,7 +219,7 @@ with col_input1:
         
         if submit and m_paiement > 0:
             if d_paiement > DATE_JUGEMENT:
-                st.error("❌ Date postérieure au jugement !")
+                st.error("❌ Date postérieure au jugement (26/06/2025) !")
             else:
                 st.session_state.paiements.append({"date": d_paiement, "montant": m_paiement})
                 st.success("Ajouté !")
@@ -257,185 +232,236 @@ with col_input1:
             st.session_state.paiements = []
             st.rerun()
 
-# --- 3. CALCULS ET RÉSULTATS ---
+# --- 3. CALCULS ET RÉSULTATS (ALGORITHME WATERFALL) ---
 if loyer_ht > 0:
-    # A. Génération de l'échéancier théorique
+    # A. Fusion Chronologique
     echeances = generer_loyers_theoriques(loyer_ht)
     
-    total_principal_du = 0
-    total_interets_du = 0
+    events = []
+    for ech in echeances:
+        events.append({
+            "date": ech["date"], 
+            "type": "LOYER", 
+            "montant": ech["montant"], 
+            "label": ech["label"]
+        })
+    
+    for p in st.session_state.paiements:
+        events.append({
+            "date": p["date"], 
+            "type": "PAIEMENT", 
+            "montant": p["montant"], 
+            "label": "Virement Reçu"
+        })
+    
+    # Tri chronologique strict
+    events.sort(key=lambda x: x["date"])
+
+    # B. Le Moteur de Calcul
+    solde_principal = 0.0  # Capital dû
+    solde_interets = 0.0   # Intérêts cumulés
+    last_date = events[0]["date"] if events else DATE_DEBUT_GRAPH
+    
     data_detail = []
 
-    # B. Calcul des Intérêts sur Dettes
-    for ech in echeances:
-        interet = calculer_interets_ligne(ech["montant"], ech["date"], DATE_JUGEMENT)
-        total_principal_du += ech["montant"]
-        total_interets_du += interet
-        data_detail.append({
-            "Date": ech["date"],
-            "Type": "LOYER DÛ",
-            "Libellé": ech["label"],
-            "Débit (TTC)": ech["montant"],
-            "Crédit (TTC)": 0.0,
-            "Intérêts": interet
-        })
+    for event in events:
+        current_date = event["date"]
+        
+        # 1. Calcul des intérêts courus
+        if current_date > last_date and solde_principal > 0:
+            interets_periode = calculer_interets_ligne(solde_principal, last_date, current_date)
+            solde_interets += interets_periode
+        
+        # 2. Traitement de l'événement
+        montant_operation = event["montant"]
+        
+        if event["type"] == "LOYER":
+            solde_principal += montant_operation
+            data_detail.append({
+                "Date": current_date,
+                "Libellé": event["label"],
+                "Opération": "LOYER",
+                "Débit": montant_operation,
+                "Crédit": 0,
+                "Imput. Intérêts": 0,
+                "Imput. Principal": 0,
+                "Reste Principal": solde_principal,
+                "Reste Intérêts": solde_interets
+            })
+            
+        elif event["type"] == "PAIEMENT":
+            # --- APPLICATION ART. 1343-1 ---
+            reste_a_imputer = montant_operation
+            
+            # a) D'abord les intérêts
+            part_interets = min(reste_a_imputer, solde_interets)
+            solde_interets -= part_interets
+            reste_a_imputer -= part_interets
+            
+            # b) Ensuite le capital
+            part_principal = reste_a_imputer
+            solde_principal -= part_principal
+            
+            data_detail.append({
+                "Date": current_date,
+                "Libellé": event["label"],
+                "Opération": "PAIEMENT",
+                "Débit": 0,
+                "Crédit": montant_operation,
+                "Imput. Intérêts": -part_interets,
+                "Imput. Principal": -part_principal,
+                "Reste Principal": solde_principal,
+                "Reste Intérêts": solde_interets
+            })
+            
+        last_date = current_date
 
-    # C. Calcul des Intérêts (déductibles) sur Paiements
-    total_paye = 0
-    total_interets_paye = 0
-    for p in st.session_state.paiements:
-        interet_p = calculer_interets_ligne(p["montant"], p["date"], DATE_JUGEMENT)
-        total_paye += p["montant"]
-        total_interets_paye += interet_p
-        data_detail.append({
-            "Date": p["date"],
-            "Type": "PAIEMENT",
-            "Libellé": "Virement Reçu",
-            "Débit (TTC)": 0.0,
-            "Crédit (TTC)": p["montant"],
-            "Intérêts": -interet_p 
-        })
-    
-    # D. Totaux Finaux
-    df_final = pd.DataFrame(data_detail).sort_values(by="Date")
-    principal_net = total_principal_du - total_paye
-    # On s'assure que les intérêts ne sont pas négatifs
-    interets_net = max(0.0, total_interets_du - total_interets_paye)
+    # C. Calcul final jusqu'au Jugement
+    if last_date < DATE_JUGEMENT and solde_principal > 0:
+        interets_finaux = calculer_interets_ligne(solde_principal, last_date, DATE_JUGEMENT)
+        solde_interets += interets_finaux
+
+    # Totaux
+    principal_net = max(0.0, solde_principal)
+    interets_net = max(0.0, solde_interets)
     total_creance = principal_net + interets_net
-
-    # --- 4. PRÉPARATION DU GRAPHIQUE (SIMULATION) ---
-    graph_data = []
-    current_d = DATE_DEBUT_GRAPH
     
-    # Boucle mois par mois pour tracer la courbe
-    while current_d <= DATE_JUGEMENT:
-        # Somme dus à date
-        sum_due = sum(e["montant"] for e in echeances if e["date"] <= current_d)
-        # Somme payés à date
-        sum_paid = sum(p["montant"] for p in st.session_state.paiements if p["date"] <= current_d)
-        balance_principal = sum_due - sum_paid
-        
-        # Intérêts courus à date
-        int_dette_t = 0
-        for e in echeances:
-            if e["date"] < current_d:
-                int_dette_t += calculer_interets_ligne(e["montant"], e["date"], current_d)
-        
-        int_pay_t = 0
-        for p in st.session_state.paiements:
-            if p["date"] < current_d:
-                int_pay_t += calculer_interets_ligne(p["montant"], p["date"], current_d)
-        
-        balance_interets = max(0.0, int_dette_t - int_pay_t)
-        
-        graph_data.append({
-            "Date": pd.to_datetime(current_d),
-            "Dette Principal (Bleu)": balance_principal,
-            "Intérêts Cumulés (Rouge)": balance_interets
-        })
-        
-        # Saut au mois suivant
-        next_month = current_d.replace(day=28) + timedelta(days=4)
-        current_d = next_month.replace(day=1)
+    df_final = pd.DataFrame(data_detail)
 
-    df_graph = pd.DataFrame(graph_data)
-    df_graph_melted = df_graph.melt('Date', var_name='Type', value_name='Montant (€)')
-
-    # --- 5. AFFICHAGE RÉSULTATS (DROITE) ---
+    # --- 4. AFFICHAGE RÉSULTATS (DROITE) ---
     with col_input2:
-        st.markdown("### 📈 Évolution de la Dette & Intérêts")
+        # NOTE PEDAGOGIQUE VISIBLE
+        st.info("""
+        ℹ️ **Comprendre le calcul (Art. 1343-1 Code Civil)**
+        Les paiements reçus remboursent **en priorité les intérêts de retard**. 
+        Le capital (Loyer) ne baisse que si les intérêts sont intégralement payés. 
+        Cette méthode maximise légalement votre montant Principal (Privilégié).
+        """)
         
-        # GRAPHIQUE ALTAIR
-        base_chart = alt.Chart(df_graph_melted).mark_line(strokeWidth=3).encode(
-            x=alt.X('Date', axis=alt.Axis(format='%d/%m/%Y', title='Date')),
-            y=alt.Y('Montant (€)', axis=alt.Axis(title='Montant (€)')),
-            color=alt.Color('Type', scale=alt.Scale(domain=['Dette Principal (Bleu)', 'Intérêts Cumulés (Rouge)'], range=['#1f77b4', '#d62728'])),
-            tooltip=[
-                alt.Tooltip('Date', format='%d/%m/%Y', title='Date'),
-                alt.Tooltip('Type', title='Type'),
-                alt.Tooltip('Montant (€)', format=',.2f', title='Montant (€)')
-            ]
-        )
-        
-        # Ligne verticale Jugement
-        jugement_df = pd.DataFrame({'Date': [pd.to_datetime(DATE_JUGEMENT)], 'Label': [' JUGEMENT RJ']})
-        vline = alt.Chart(jugement_df).mark_rule(color='black', strokeDash=[5, 5], strokeWidth=2).encode(x='Date')
-        vtext = alt.Chart(jugement_df).mark_text(
-            align='left', baseline='middle', dx=5, dy=-10, color='black', fontSize=12, fontWeight='bold'
-        ).encode(x='Date', text='Label')
-        
-        final_chart = (base_chart + vline + vtext).interactive()
-        st.altair_chart(final_chart, use_container_width=True)
-
-        st.markdown("### 📊 Synthèse Chiffrée")
+        st.markdown("### 📊 Synthèse à Déclarer")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Principal Net", f"{principal_net:,.2f} €")
-        c2.metric("Intérêts Net", f"{interets_net:,.2f} €")
+        c1.metric("Principal (Privilégié)", f"{principal_net:,.2f} €")
+        c2.metric("Intérêts (Chiro.)", f"{interets_net:,.2f} €")
         c3.metric("TOTAL", f"{total_creance:,.2f} €")
+
+        st.markdown("### 📈 Évolution de la Dette")
+        
+        if not df_final.empty:
+            df_graph = df_final[["Date", "Reste Principal", "Reste Intérêts"]].copy()
+            df_graph.rename(columns={"Reste Principal": "Dette Principal (Bleu)", "Reste Intérêts": "Intérêts Cumulés (Rouge)"}, inplace=True)
+            df_graph.loc[len(df_graph)] = [DATE_JUGEMENT, principal_net, interets_net]
+            df_graph_melted = df_graph.melt('Date', var_name='Type', value_name='Montant (€)')
+
+            base_chart = alt.Chart(df_graph_melted).mark_line(strokeWidth=3, interpolate='step-after').encode(
+                x=alt.X('Date', axis=alt.Axis(format='%d/%m/%Y')),
+                y=alt.Y('Montant (€)'),
+                color=alt.Color('Type', scale=alt.Scale(domain=['Dette Principal (Bleu)', 'Intérêts Cumulés (Rouge)'], range=['#1f77b4', '#d62728'])),
+                tooltip=['Date', 'Type', 'Montant (€)']
+            )
+            
+            jugement_df = pd.DataFrame({'Date': [pd.to_datetime(DATE_JUGEMENT)], 'Label': [' JUGEMENT RJ']})
+            vline = alt.Chart(jugement_df).mark_rule(color='black', strokeDash=[5, 5]).encode(x='Date')
+            
+            st.altair_chart((base_chart + vline).interactive(), use_container_width=True)
         
         with st.expander("Voir le détail ligne par ligne"):
-            st.dataframe(df_final.style.format({
-                "Débit (TTC)": "{:.2f}", 
-                "Crédit (TTC)": "{:.2f}", 
-                "Intérêts": "{:.2f}", 
-                "Date": lambda t: t.strftime("%d/%m/%Y")
-            }))
+            if not df_final.empty:
+                st.dataframe(df_final.style.format({
+                    "Débit": "{:.2f}", "Crédit": "{:.2f}", 
+                    "Imput. Intérêts": "{:.2f}", "Imput. Principal": "{:.2f}",
+                    "Reste Principal": "{:.2f}", "Reste Intérêts": "{:.2f}",
+                    "Date": lambda t: t.strftime("%d/%m/%Y")
+                }))
 
-    # --- 6. GÉNÉRATION PDF (CORRECTIF APPLIQUÉ) ---
+    # --- 5. GÉNÉRATION PDF AVEC EXPLICATIONS ---
     pdf = PDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
     
-    # En-tête info
-    pdf.cell(0, 10, f"Date arret des comptes : 26/06/2025", 0, 1)
-    pdf.cell(0, 10, f"Loyer Annuel Base : {loyer_ht:,.2f} HT", 0, 1)
+    # EN-TETE
+    pdf.cell(0, 8, f"Arret des comptes au : 26/06/2025 (Jugement RJ)", 0, 1)
+    pdf.cell(0, 8, f"Base Loyer Annuel : {loyer_ht:,.2f} EUR HT", 0, 1)
     
-    # Tableau Synthèse
+    # ENCART EXPLICATIF JURIDIQUE (NOUVEAU)
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(0, 8, "NOTICE DE CALCUL (Article 1343-1 du Code Civil)", 1, 1, 'L', fill=True)
+    pdf.set_font("Arial", '', 9)
+    note_text = ("Pour maximiser la creance privilegiee du bailleur, le calcul applique strictement la loi : "
+                 "tout paiement partiel recu est impute prioritairement sur les interets de retard accumules, "
+                 "et subsidiairement sur le capital (Loyer).")
+    # Encodage manuel safe pour le PDF
+    pdf.multi_cell(0, 5, note_text.encode('latin-1', 'replace').decode('latin-1'), 1)
+    
+    # TABLEAU SYNTHESE
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(100, 10, "TOTAL GENERAL A DECLARER", 1)
     pdf.cell(50, 10, f"{total_creance:,.2f} EUR", 1, 1, 'R')
     
-    pdf.ln(5)
+    pdf.ln(2)
     pdf.set_font("Arial", '', 10)
     pdf.cell(100, 8, "- Dont Principal (Privilege)", 1)
     pdf.cell(50, 8, f"{principal_net:,.2f} EUR", 1, 1, 'R')
     pdf.cell(100, 8, "- Dont Interets (Chirographaire)", 1)
     pdf.cell(50, 8, f"{interets_net:,.2f} EUR", 1, 1, 'R')
 
-    # Tableau Détail
-    pdf.ln(10)
+    # TABLEAU DES PAIEMENTS RECUS
+    if st.session_state.paiements:
+        pdf.ln(8)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 8, "RECAPITULATIF DES PAIEMENTS RECUS", 0, 1)
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(40, 7, "Date", 1)
+        pdf.cell(40, 7, "Montant Recu", 1, 1)
+        
+        pdf.set_font("Arial", '', 9)
+        total_p_pdf = 0
+        for p in st.session_state.paiements:
+            d_str = p['date'].strftime("%d/%m/%Y")
+            pdf.cell(40, 6, d_str, 1)
+            pdf.cell(40, 6, f"{p['montant']:.2f} EUR", 1, 1, 'R')
+            total_p_pdf += p['montant']
+        
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(40, 6, "TOTAL PERCU", 1)
+        pdf.cell(40, 6, f"{total_p_pdf:.2f} EUR", 1, 1, 'R')
+
+    # TABLEAU DETAIL CALCUL
+    pdf.ln(8)
     pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 10, "DETAIL DES CALCULS", 0, 1)
+    pdf.cell(0, 8, "DETAIL DES IMPUTATIONS (HISTORIQUE)", 0, 1)
     
-    pdf.set_font("Arial", size=8)
-    # En-têtes
-    pdf.cell(25, 8, "Date", 1)
-    pdf.cell(70, 8, "Libelle", 1)
-    pdf.cell(25, 8, "Du (TTC)", 1)
-    pdf.cell(25, 8, "Recu", 1)
-    pdf.cell(25, 8, "Interets", 1, 1)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.cell(20, 8, "Date", 1)
+    pdf.cell(55, 8, "Libelle", 1)
+    pdf.cell(20, 8, "Debit", 1)
+    pdf.cell(20, 8, "Credit", 1)
+    pdf.cell(25, 8, "Imp. Princ.", 1)
+    pdf.cell(25, 8, "Solde Princ.", 1)
+    pdf.cell(25, 8, "Solde Int.", 1, 1)
     
+    pdf.set_font("Arial", '', 8)
     for index, row in df_final.iterrows():
         d_str = row['Date'].strftime("%d/%m/%Y")
-        
-        # Nettoyage des caractères pour le PDF (latin-1 safe)
         libelle = str(row['Libellé']).encode('latin-1', 'replace').decode('latin-1')
         
-        pdf.cell(25, 6, d_str, 1)
-        pdf.cell(70, 6, libelle[:40], 1) # Tronque si trop long
-        pdf.cell(25, 6, f"{row['Débit (TTC)']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Crédit (TTC)']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Intérêts']:.2f}", 1, 1, 'R')
+        pdf.cell(20, 6, d_str, 1)
+        pdf.cell(55, 6, libelle[:30], 1)
+        pdf.cell(20, 6, f"{row['Débit']:.2f}", 1, 0, 'R')
+        pdf.cell(20, 6, f"{row['Crédit']:.2f}", 1, 0, 'R')
+        pdf.cell(25, 6, f"{row['Imput. Principal']:.2f}", 1, 0, 'R')
+        pdf.cell(25, 6, f"{row['Reste Principal']:.2f}", 1, 0, 'R')
+        pdf.cell(25, 6, f"{row['Reste Intérêts']:.2f}", 1, 1, 'R')
 
-    # FIX DU BUG DE TÉLÉCHARGEMENT
-    # On force la sortie en string binaire (dest='S') compatible latin-1
+    # DOWNLOAD
     pdf_content = pdf.output(dest='S').encode('latin-1')
     
     st.download_button(
-        label="📄 TÉLÉCHARGER PDF OFFICIEL",
+        label="📄 TÉLÉCHARGER DÉCLARATION CRÉANCE (PDF)",
         data=pdf_content,
-        file_name="creance_albion.pdf",
+        file_name="declaration_creance_albion_expliquee.pdf",
         mime="application/pdf"
     )
 
