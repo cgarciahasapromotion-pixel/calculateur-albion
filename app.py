@@ -77,12 +77,10 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
     loyer_base_mensuel = loyer_annuel_ttc / 12
     echeances = []
     
-    # 2019 à 2024 (Simplifié pour lecture, code identique)
-    # ... (Logique identique à la version précédente) ...
-    # Je remets la logique complète pour garantir l'intégrité
-    
+    # 2019
     echeances.append({"date": date(2019, 10, 10), "label": "Loyer 2019 (4 mois TTC)", "montant": loyer_base_mensuel * 4})
     
+    # 2020
     loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
     echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": loyer_base_mensuel * 3})
     montant_t2_mixte = (loyer_base_mensuel * 2) + (loyer_2020 * 1)
@@ -90,11 +88,13 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
     echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
     echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
     
-    loyer_2021 = loyer_2020 # Sauvegarde
+    # 2021
+    loyer_2021 = loyer_2020 
     for t in range(1, 5): 
         d = date(2021, 1 + (t-1)*3, 10)
         echeances.append({"date": d, "label": f"T{t} 2021", "montant": loyer_2021 * 3})
         
+    # 2022
     loyer_2022 = loyer_base_mensuel * (INDICES["2021"] / INDICES["BASE"])
     echeances.append({"date": date(2022, 1, 10), "label": "T1 2022", "montant": loyer_2021 * 3})
     montant_t2_22 = (loyer_2021 * 2) + (loyer_2022 * 1)
@@ -102,6 +102,7 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
     echeances.append({"date": date(2022, 7, 10), "label": "T3 2022", "montant": loyer_2022 * 3})
     echeances.append({"date": date(2022, 10, 10), "label": "T4 2022", "montant": loyer_2022 * 3})
     
+    # 2023
     loyer_2023 = loyer_base_mensuel * (INDICES["2022"] / INDICES["BASE"])
     echeances.append({"date": date(2023, 1, 10), "label": "T1 2023", "montant": loyer_2022 * 3})
     montant_t2_23 = (loyer_2022 * 2) + (loyer_2023 * 1)
@@ -109,6 +110,7 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
     echeances.append({"date": date(2023, 7, 10), "label": "T3 2023", "montant": loyer_2023 * 3})
     echeances.append({"date": date(2023, 10, 10), "label": "T4 2023", "montant": loyer_2023 * 3})
 
+    # 2024
     loyer_2024 = loyer_base_mensuel * (INDICES["2023"] / INDICES["BASE"])
     echeances.append({"date": date(2024, 1, 10), "label": "T1 2024", "montant": loyer_2023 * 3})
     montant_t2_24 = (loyer_2023 * 2) + (loyer_2024 * 1)
@@ -248,33 +250,37 @@ if loyer_ht == 0:
     st.stop()
 
 # --- ONGLETS (TABS) ---
-tab1, tab2 = st.tabs(["🔒 1. DÉCLARATION (Dettes Avant RJ)", "🔄 2. SUIVI LOYERS (Après RJ)"])
+tab1, tab2 = st.tabs(["🔒 1. DÉCLARATION (Dettes Anciennes)", "🔄 2. SUIVI LOYERS (Après RJ)"])
 
 # ==========================================
 # ONGLET 1 : ANCIEN SYSTÈME (PRÉ-RJ)
 # ==========================================
 with tab1:
+    # CONTENEUR VISUEL BLEU POUR MARQUER LA DIFFERENCE
+    st.info("### 🟦 ESPACE DÉCLARATION DE CRÉANCE\n\nConcerne uniquement les loyers et dettes **AVANT le jugement (26 Juin 2025)**.")
+    
     c1, c2 = st.columns([1, 2])
     with c1:
-        st.subheader("Paiements Reçus (Avant 26/06)")
+        st.markdown("#### Saisie des Paiements (Passé)")
         with st.form("ajout_pre"):
-            d_p = st.date_input("Date", date(2024, 1, 1))
-            m_p = st.number_input("Montant TTC", step=100.0)
-            if st.form_submit_button("Ajouter"):
+            d_p = st.date_input("Date du Virement", date(2024, 1, 1), format="DD/MM/YYYY") # Format FR
+            m_p = st.number_input("Montant TTC (€)", step=100.0)
+            if st.form_submit_button("Ajouter à la liste"):
                 if d_p > DATE_JUGEMENT:
-                    st.error("Date postérieure au jugement ! Utilisez l'onglet 2.")
+                    st.error("❌ Date postérieure au jugement ! Allez dans l'Onglet 2.")
                 else:
                     st.session_state.paiements_pre.append({"date": d_p, "montant": m_p})
                     st.rerun()
         
         if st.session_state.paiements_pre:
-            st.dataframe(pd.DataFrame(st.session_state.paiements_pre))
-            if st.button("Effacer Liste Avant RJ"):
+            # Affichage FR dans le tableau
+            st.dataframe(pd.DataFrame(st.session_state.paiements_pre).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
+            if st.button("🗑️ Effacer Liste Avant RJ"):
                 st.session_state.paiements_pre = []
                 st.rerun()
 
     with c2:
-        # CALCUL WATERFALL (Copie conforme logique validée)
+        # CALCUL WATERFALL
         echeances = generer_loyers_theoriques_pre_rj(loyer_ht)
         events = []
         nb_echeances = 0
@@ -323,7 +329,7 @@ with tab1:
         cols[1].metric("Intérêts (Chiro.)", f"{int_net:,.2f} €")
         cols[2].metric("Indemnités (Chiro.)", f"{indemnite:,.2f} €")
         
-        # PDF GENERATION (Simplifié pour le code, mais complet)
+        # PDF GENERATION
         pdf = PDFDeclaration()
         pdf.add_page()
         pdf.set_font("Arial", '', 10)
@@ -352,32 +358,34 @@ with tab1:
         pdf.set_font("Arial", 'I', 8)
         pdf.cell(0, 5, "Sous reserve des loyers a echoir (Art. L. 622-24).", 0, 1, 'C')
         
-        st.download_button("📄 PDF DÉCLARATION CRÉANCE", pdf.output(dest='S').encode('latin-1'), "creance_albion.pdf", "application/pdf")
+        st.download_button("📄 TÉLÉCHARGER PDF DÉCLARATION", pdf.output(dest='S').encode('latin-1'), "creance_albion.pdf", "application/pdf")
 
 
 # ==========================================
 # ONGLET 2 : NOUVEAU SYSTÈME (POST-RJ)
 # ==========================================
 with tab2:
-    st.info("ℹ️ **Période Post-Jugement (Art L.622-17)** : Ces loyers sont dus *au comptant*. Ils ne se déclarent pas, ils se réclament.")
+    # CONTENEUR VISUEL ORANGE POUR ALERTER
+    st.warning("### 🟧 ESPACE SUIVI & MISE EN DEMEURE (Post-Jugement)\n\nConcerne les loyers courants **APRÈS le 26 Juin 2025**. (Art L.622-17 : Paiement au comptant).")
     
     col_p1, col_p2 = st.columns([1, 2])
     
     with col_p1:
-        st.subheader("Paiements Reçus (Depuis 27/06)")
+        st.markdown("#### Saisie Paiements Reçus (Futur)")
         with st.form("ajout_post"):
-            d_p_post = st.date_input("Date", date.today())
+            d_p_post = st.date_input("Date du Virement", date.today(), format="DD/MM/YYYY") # Format FR
             m_p_post = st.number_input("Montant Reçu (€)", step=100.0)
-            if st.form_submit_button("Ajouter paiement Admin."):
+            if st.form_submit_button("Ajouter Paiement Admin."):
                 if d_p_post <= DATE_JUGEMENT:
-                    st.error("Date antérieure au jugement ! Utilisez l'onglet 1.")
+                    st.error("❌ Date antérieure au jugement ! Allez dans l'Onglet 1.")
                 else:
                     st.session_state.paiements_post.append({"date": d_p_post, "montant": m_p_post})
                     st.rerun()
         
         if st.session_state.paiements_post:
-            st.dataframe(pd.DataFrame(st.session_state.paiements_post))
-            if st.button("Effacer Liste Post RJ"):
+            # Affichage FR
+            st.dataframe(pd.DataFrame(st.session_state.paiements_post).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
+            if st.button("🗑️ Effacer Liste Post RJ"):
                 st.session_state.paiements_post = []
                 st.rerun()
 
@@ -388,10 +396,7 @@ with tab2:
         total_du_post = 0
         detail_post = []
         
-        # On croise échéances et paiements (méthode simple ici : Total Dû vs Total Payé)
-        # Car en post-RJ, on veut surtout savoir "Combien il manque à date ?"
-        
-        st.subheader("État des lieux (Loyers Courants)")
+        st.markdown("#### État des lieux (Loyers Courants)")
         
         today = date.today()
         total_paye_post = sum(p["montant"] for p in st.session_state.paiements_post)
@@ -413,6 +418,7 @@ with tab2:
             })
             
         df_post = pd.DataFrame(table_rows)
+        # Affichage FR dans le tableau
         st.dataframe(df_post.style.format({"Montant": "{:.2f} €", "Échéance": lambda t: t.strftime("%d/%m/%Y")}))
         
         reste_a_payer_post = total_du_post - total_paye_post
