@@ -50,76 +50,60 @@ def get_taux_legal(d):
 def calculer_interets_ligne(montant, date_depart, date_fin):
     """Calcule les intérêts sur une somme entre deux dates"""
     total_interets = 0
-    
     if date_depart >= date_fin:
         return 0.0
 
     current_date = date_depart
     while current_date < date_fin:
-        # Trouver le taux actuel
         taux = get_taux_legal(current_date)
-        
-        # Trouver la prochaine date de changement de taux
         next_change = date_fin
         for start_date, _ in TAUX_LEGAUX:
             if start_date > current_date and start_date < date_fin:
                 next_change = start_date
                 break
-        
-        # Calculer jours
         days = (next_change - current_date).days
         interet_periode = montant * (taux / 100) * (days / 365)
         total_interets += interet_periode
-        
         current_date = next_change
         
     return total_interets
 
 # --- GÉNÉRATION DE L'ÉCHÉANCIER THÉORIQUE ---
 def generer_loyers_theoriques(loyer_annuel_ht):
-    loyer_base_mensuel = (loyer_annuel_ht * 1.10) / 12
+    # C'EST ICI QUE LA TVA S'APPLIQUE
+    loyer_annuel_ttc = loyer_annuel_ht * 1.10
+    loyer_base_mensuel = loyer_annuel_ttc / 12
+    
     echeances = []
 
     # 1. ANNEE 2019 (3 mois offerts Juin-Aout -> Reste Sept-Dec)
-    # Loyer de base
     montant_mensuel = loyer_base_mensuel
-    # T4 2019 (Oct Nov Dec) - Echéance 10 Octobre
-    # Septembre était dû mais souvent compté dans le prorata ou premier terme. 
-    # Pour simplifier et coller au calcul "Magic Number" (9 mois en 2019/2020) :
-    # On compte Oct/Nov/Dec + Septembre séparé ou groupé.
-    # Ici on met un T4 complet + Septembre isolé pour la justesse.
-    
+    # On compte Oct/Nov/Dec + Septembre.
     echeances.append({
         "date": date(2019, 10, 10), 
-        "label": "Loyer 2019 (Sept-Déc)", 
+        "label": "Loyer 2019 (4 mois TTC)", 
         "montant": montant_mensuel * 4
     })
 
-    # 2. ANNEE 2020 (Jan-Mai : Base / Juin-Dec : Indexé)
-    # T1 2020
+    # 2. ANNEE 2020
     echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": montant_mensuel * 3})
-    # T2 2020 (Avril Mai au vieux taux, Juin au nouveau ?) 
-    # Simplification : Indexation au 1er Juin.
-    # Donc Avril/Mai = Base. Juin = Indexé.
     loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
+    # T2 Mixte (Avril Mai base / Juin indexé)
     montant_t2_mixte = (montant_mensuel * 2) + (loyer_2020 * 1)
     echeances.append({"date": date(2020, 4, 10), "label": "T2 2020 (Mixte)", "montant": montant_t2_mixte})
-    
-    # Reste 2020
     echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
     echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
 
-    # 3. ANNEE 2021 (Clause sauvegarde : Indice baisse -> Maintien loyer précédent)
+    # 3. ANNEE 2021 (Clause sauvegarde)
     loyer_2021 = loyer_2020
     echeances.append({"date": date(2021, 1, 10), "label": "T1 2021", "montant": loyer_2021 * 3})
-    echeances.append({"date": date(2021, 4, 10), "label": "T2 2021", "montant": loyer_2021 * 3}) # Juin ne bouge pas
+    echeances.append({"date": date(2021, 4, 10), "label": "T2 2021", "montant": loyer_2021 * 3})
     echeances.append({"date": date(2021, 7, 10), "label": "T3 2021", "montant": loyer_2021 * 3})
     echeances.append({"date": date(2021, 10, 10), "label": "T4 2021", "montant": loyer_2021 * 3})
 
     # 4. ANNEE 2022
     loyer_2022 = loyer_base_mensuel * (INDICES["2021"] / INDICES["BASE"])
-    echeances.append({"date": date(2022, 1, 10), "label": "T1 2022", "montant": loyer_2021 * 3}) # Jan-Mai ancien tarif
-    # T2 Mixte (Avril Mai vieux / Juin neuf)
+    echeances.append({"date": date(2022, 1, 10), "label": "T1 2022", "montant": loyer_2021 * 3})
     montant_t2_22 = (loyer_2021 * 2) + (loyer_2022 * 1)
     echeances.append({"date": date(2022, 4, 10), "label": "T2 2022 (Indexation)", "montant": montant_t2_22})
     echeances.append({"date": date(2022, 7, 10), "label": "T3 2022", "montant": loyer_2022 * 3})
@@ -142,13 +126,8 @@ def generer_loyers_theoriques(loyer_annuel_ht):
     echeances.append({"date": date(2024, 10, 10), "label": "T4 2024", "montant": loyer_2024 * 3})
 
     # 7. ANNEE 2025 (Jusqu'au RJ)
-    # T1 2025 (Jan Fev Mars)
     echeances.append({"date": date(2025, 1, 10), "label": "T1 2025", "montant": loyer_2024 * 3})
-    # T2 partiel (Avril Mai complets + Juin prorata)
-    # Avril et Mai sont au tarif 2024.
-    # Juin (du 1er au 26) est au tarif 2025 (Index T4 2024).
     loyer_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
-    
     montant_avril_mai = loyer_2024 * 2
     montant_juin_prorata = (loyer_2025 / 30) * 26
     
@@ -170,6 +149,8 @@ class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
         self.cell(0, 10, 'Déclaration de Créance - HOTEL ALBION', 0, 1, 'C')
+        self.set_font('Arial', 'I', 10)
+        self.cell(0, 10, '(Montants exprimés en TTC - TVA 10% incluse)', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
@@ -180,57 +161,72 @@ class PDF(FPDF):
 # --- INTERFACE ---
 
 st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
-st.markdown("""
-Cet outil génère votre dossier de déclaration de créance.
-1. Entrez votre loyer de base.
-2. Ajoutez vos paiements reçus **un par un** avec leur date.
-3. Téléchargez le PDF officiel.
-""")
 
-# SESSION STATE POUR LES PAIEMENTS
+# --- SECTION PÉDAGOGIQUE ---
+with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres (Cliquez ici)", expanded=True):
+    st.markdown("""
+    **Pourquoi cet outil ?**
+    Pour calculer votre créance exacte au centime près, en appliquant les indexations ILC (inflation) et les pénalités de retard légales.
+    
+    **1. HT ou TTC ?**
+    * Le bail fixe un loyer **HT (Hors Taxes)**.
+    * L'application ajoute automatiquement **10% de TVA**.
+    * Le résultat final (Dette) est affiché en **TTC**, car c'est ce que vous devez comparer aux virements reçus.
+    
+    **2. Le Principal Net (Créance Privilégiée)**
+    * C'est l'argent du loyer "pur" qui manque.
+    * *Calcul :* (Loyers TTC théoriques indexés) - (Virements TTC reçus).
+    
+    **3. Les Intérêts de Retard (Créance Chirographaire)**
+    * L'argent a un coût. Le Code de Commerce impose des pénalités entre professionnels.
+    * Le taux appliqué ici est le taux légal (Refi BCE + 10 points), soit environ 13-14% par an.
+    * *Note :* Chaque virement que vous avez reçu vient d'abord "effacer" des intérêts avant de rembourser le loyer. L'outil fait ce calcul complexe pour vous.
+    """)
+
+# SESSION STATE
 if 'paiements' not in st.session_state:
     st.session_state.paiements = []
 
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
-    st.subheader("1. Données du Bail")
-    loyer_ht = st.number_input("Loyer Annuel HT (Bail)", min_value=0.0, step=100.0, format="%.2f")
+    st.markdown("### 1. Données du Bail (HT)")
+    st.warning("⚠️ Attention : Entrez le montant **ANNUEL** et **HORS TAXES** inscrit sur votre bail.")
+    loyer_ht = st.number_input("Loyer Annuel HT (€)", min_value=0.0, step=100.0, format="%.2f")
+    st.caption(f"L'outil ajoutera automatiquement 10% de TVA. Soit un loyer de base de {(loyer_ht*1.10):,.2f} € TTC/an.")
     
-    st.subheader("2. Paiements Reçus")
-    st.caption("Ajoutez chaque virement perçu avant le 26/06/2025.")
+    st.markdown("### 2. Paiements Reçus (TTC)")
+    st.info("Ajoutez ici chaque virement reçu **AVANT le 26/06/2025**.")
     
     with st.form("ajout_paiement"):
         d_paiement = st.date_input("Date du virement", value=date(2024, 1, 1))
-        m_paiement = st.number_input("Montant (€)", min_value=0.0, step=10.0)
+        m_paiement = st.number_input("Montant Reçu TTC (€)", min_value=0.0, step=10.0)
         submit = st.form_submit_button("Ajouter ce paiement")
         
         if submit and m_paiement > 0:
             if d_paiement > DATE_JUGEMENT:
-                st.error("Ce paiement est postérieur au RJ, ne pas l'inclure ici !")
+                st.error("❌ Ce paiement est POSTÉRIEUR au RJ (après le 26 juin). Ne le mettez pas ici !")
             else:
                 st.session_state.paiements.append({"date": d_paiement, "montant": m_paiement})
-                st.success("Ajouté !")
+                st.success("✅ Paiement ajouté !")
 
     # Liste des paiements
     if st.session_state.paiements:
         st.write("---")
-        st.write("**Liste des versements :**")
+        st.write("**Historique des virements saisis :**")
         p_df = pd.DataFrame(st.session_state.paiements)
-        # Option pour supprimer (simple reset pour cette version)
-        st.dataframe(p_df)
-        if st.button("Effacer tous les paiements"):
+        st.dataframe(p_df.style.format({"montant": "{:.2f} € TTC"}))
+        if st.button("🗑️ Effacer tous les paiements"):
             st.session_state.paiements = []
             st.rerun()
 
 # --- CALCULS ---
 if loyer_ht > 0:
-    # 1. Génération dettes
+    # 1. Génération dettes TTC
     echeances = generer_loyers_theoriques(loyer_ht)
     
     total_principal_du = 0
     total_interets_du = 0
-    
     data_detail = []
 
     # Calcul intérêts sur Dettes
@@ -242,9 +238,9 @@ if loyer_ht > 0:
             "Date": ech["date"],
             "Type": "LOYER DÛ",
             "Libellé": ech["label"],
-            "Débit": ech["montant"],
-            "Crédit": 0,
-            "Intérêts Générés": interet
+            "Débit (TTC)": ech["montant"],
+            "Crédit (TTC)": 0,
+            "Intérêts": interet
         })
 
     # Calcul intérêts (épargnés) sur Paiements
@@ -259,37 +255,41 @@ if loyer_ht > 0:
             "Date": p["date"],
             "Type": "PAIEMENT",
             "Libellé": "Virement Reçu",
-            "Débit": 0,
-            "Crédit": p["montant"],
-            "Intérêts Générés": -interet_p # Négatif car réduit la dette
+            "Débit (TTC)": 0,
+            "Crédit (TTC)": p["montant"],
+            "Intérêts": -interet_p 
         })
     
-    # Tri chronologique pour le tableau
+    # Tri chronologique
     df_final = pd.DataFrame(data_detail).sort_values(by="Date")
     
     # TOTAUX
     principal_net = total_principal_du - total_paye
     interets_net = total_interets_du - total_interets_paye
+    # Sécurité pour ne pas avoir d'intérêts négatifs si trop perçu (rare)
+    if interets_net < 0: interets_net = 0
+    
     total_creance = principal_net + interets_net
 
     with col_right:
-        st.subheader("3. Résultats")
+        st.markdown("### 3. Résultats & Synthèse")
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Principal Dû", f"{total_principal_du:,.2f} €")
-        c2.metric("Total Payé", f"- {total_paye:,.2f} €")
-        c3.metric("PRINCIPAL NET", f"{principal_net:,.2f} €")
+        c1.metric("Loyer Dû (TTC)", f"{total_principal_du:,.2f} €")
+        c2.metric("Déjà Payé (TTC)", f"- {total_paye:,.2f} €")
+        c3.metric("PRINCIPAL NET", f"{principal_net:,.2f} €", help="Montant TTC des loyers impayés")
         
         st.write("---")
         
         c4, c5, c6 = st.columns(3)
-        c4.metric("Intérêts sur Dettes", f"{total_interets_du:,.2f} €")
-        c5.metric("Déduction s/Paiements", f"- {total_interets_paye:,.2f} €")
-        c6.metric("INTÉRÊTS NETS", f"{interets_net:,.2f} €")
+        c4.metric("Intérêts Bruts", f"{total_interets_du:,.2f} €")
+        c5.metric("Déduction", f"- {total_interets_paye:,.2f} €")
+        c6.metric("INTÉRÊTS NETS", f"{interets_net:,.2f} €", help="Pénalités de retard légales (Art L441-10)")
         
-        st.success(f"### TOTAL À DÉCLARER : {total_creance:,.2f} €")
+        st.success(f"### 💰 TOTAL À DÉCLARER : {total_creance:,.2f} €")
         
-        st.dataframe(df_final.style.format({"Débit": "{:.2f}", "Crédit": "{:.2f}", "Intérêts Générés": "{:.2f}"}))
+        with st.expander("Voir le détail ligne par ligne"):
+            st.dataframe(df_final.style.format({"Débit (TTC)": "{:.2f}", "Crédit (TTC)": "{:.2f}", "Intérêts": "{:.2f}"}))
 
     # --- GÉNÉRATION PDF ---
     pdf = PDF()
@@ -298,17 +298,20 @@ if loyer_ht > 0:
     
     # Info En-tête
     pdf.cell(0, 10, f"Date d'arrêt des comptes : 26 Juin 2025 (Jugement RJ)", 0, 1)
-    pdf.cell(0, 10, f"Loyer Annuel HT Base : {loyer_ht} EUR", 0, 1)
+    pdf.cell(0, 10, f"Loyer Annuel Base : {loyer_ht:,.2f} EUR HT (soit {(loyer_ht*1.10):,.2f} EUR TTC)", 0, 1)
     pdf.ln(10)
     
     # Tableau Synthèse
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "SYNTHÈSE DE LA CRÉANCE", 0, 1)
+    pdf.cell(0, 10, "SYNTHÈSE DE LA CRÉANCE (TTC)", 0, 1)
     pdf.set_font("Arial", size=11)
+    
     pdf.cell(100, 8, "Principal TTC (Loyers impayés)", 1)
     pdf.cell(50, 8, f"{principal_net:,.2f} EUR", 1, 1, 'R')
+    
     pdf.cell(100, 8, "Intérêts de retard (Art L.441-10)", 1)
     pdf.cell(50, 8, f"{interets_net:,.2f} EUR", 1, 1, 'R')
+    
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(100, 10, "TOTAL GÉNÉRAL", 1)
     pdf.cell(50, 10, f"{total_creance:,.2f} EUR", 1, 1, 'R')
@@ -317,7 +320,7 @@ if loyer_ht > 0:
     
     # Tableau Détail
     pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 10, "DÉTAIL DES MOUVEMENTS ET CALCUL INTÉRÊTS", 0, 1)
+    pdf.cell(0, 10, "DÉTAIL CHRONOLOGIQUE (TTC)", 0, 1)
     
     # En-têtes colonnes
     pdf.set_font("Arial", 'B', 8)
@@ -332,9 +335,9 @@ if loyer_ht > 0:
         d_str = row['Date'].strftime("%d/%m/%Y")
         pdf.cell(25, 6, d_str, 1)
         pdf.cell(60, 6, str(row['Libellé']), 1)
-        pdf.cell(25, 6, f"{row['Débit']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Crédit']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Intérêts Générés']:.2f}", 1, 1, 'R')
+        pdf.cell(25, 6, f"{row['Débit (TTC)']:.2f}", 1, 0, 'R')
+        pdf.cell(25, 6, f"{row['Crédit (TTC)']:.2f}", 1, 0, 'R')
+        pdf.cell(25, 6, f"{row['Intérêts']:.2f}", 1, 1, 'R')
         
     # Output PDF
     pdf_buffer = io.BytesIO()
@@ -349,4 +352,4 @@ if loyer_ht > 0:
     )
 
 else:
-    st.info("Veuillez entrer le montant du loyer annuel HT pour commencer.")
+    st.info("👈 Commencez par entrer votre Loyer Annuel HT dans la colonne de gauche.")
