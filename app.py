@@ -12,46 +12,19 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 # --- CSS PERSONNALISÉ (EFFET INTERCALAIRES) ---
 st.markdown("""
 <style>
-    /* Style général des onglets */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px; 
-    }
-
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] {
-        height: 60px; 
-        white-space: pre-wrap;
-        border-radius: 10px 10px 0px 0px; 
-        padding: 10px 20px;
-        font-size: 18px; 
-        box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-bottom: none;
+        height: 60px; white-space: pre-wrap; border-radius: 10px 10px 0px 0px;
+        padding: 10px 20px; font-size: 18px; box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
+        background-color: #f8f9fa; border: 1px solid #dee2e6; border-bottom: none;
     }
-
-    /* Onglet 1 : DÉCLARATION (BLEU) */
-    .stTabs [data-baseweb="tab"]:nth-of-type(1) {
-        border-top: 6px solid #1f77b4; 
-    }
-    
-    /* Onglet 2 : SUIVI (ORANGE) */
-    .stTabs [data-baseweb="tab"]:nth-of-type(2) {
-        border-top: 6px solid #ff7f0e; 
-    }
-
-    /* Onglet Actif */
+    .stTabs [data-baseweb="tab"]:nth-of-type(1) { border-top: 6px solid #1f77b4; }
+    .stTabs [data-baseweb="tab"]:nth-of-type(2) { border-top: 6px solid #ff7f0e; }
     .stTabs [aria-selected="true"] {
-        background-color: #ffffff !important;
-        font-weight: bold;
-        border-bottom: 0px solid transparent;
-        box-shadow: none;
+        background-color: #ffffff !important; font-weight: bold;
+        border-bottom: 0px solid transparent; box-shadow: none;
     }
-    
-    /* Onglet Inactif (Hover) */
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: #e9ecef;
-        color: #000;
-    }
+    .stTabs [data-baseweb="tab"]:hover { background-color: #e9ecef; color: #000; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -157,6 +130,7 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
+    
     echeances = []
     
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
@@ -282,7 +256,63 @@ with tab1:
 
     c1, c2 = st.columns([1, 2])
     with c1:
-        st.markdown("#### Saisie des Paiements (Passé)")
+        # --- NOUVEAU MODULE D'IMPORT INTELLIGENT ---
+        with st.expander("📂 IMPORTER UN FICHIER (CSV/EXCEL)"):
+            st.info("💡 Chargez votre relevé de compte ou tableau Excel. L'outil vous demandera simplement d'identifier les colonnes Date et Montant.")
+            uploaded_file = st.file_uploader("Choisissez votre fichier", type=['csv', 'xlsx', 'xls'])
+            
+            if uploaded_file:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df_import = pd.read_csv(uploaded_file, sep=None, engine='python')
+                    else:
+                        df_import = pd.read_excel(uploaded_file)
+                    
+                    st.write("**Aperçu des 3 premières lignes :**")
+                    st.dataframe(df_import.head(3))
+                    
+                    col_imp_date = st.selectbox("Quelle colonne contient la DATE ?", options=df_import.columns)
+                    col_imp_montant = st.selectbox("Quelle colonne contient le MONTANT ?", options=df_import.columns)
+                    
+                    if st.button("🚀 VALIDER L'IMPORT"):
+                        count = 0
+                        for index, row in df_import.iterrows():
+                            raw_date = row[col_imp_date]
+                            raw_amount = row[col_imp_montant]
+                            
+                            try:
+                                # Nettoyage Date
+                                clean_date = pd.to_datetime(raw_date, dayfirst=True).date()
+                                
+                                # Nettoyage Montant
+                                if isinstance(raw_amount, str):
+                                    # Nettoyage des espaces insécables et symboles
+                                    raw_amount = raw_amount.replace(' ', '').replace('€', '').replace('\u00A0', '').replace('\u202f', '')
+                                    raw_amount = raw_amount.replace(',', '.')
+                                
+                                clean_amount = float(raw_amount)
+                                
+                                # Ajout si positif (et date valide)
+                                if clean_amount > 0 and clean_date <= DATE_JUGEMENT:
+                                    st.session_state.paiements_pre.append({
+                                        "date": clean_date,
+                                        "montant": clean_amount
+                                    })
+                                    count += 1
+                            except:
+                                continue # On saute les lignes illisibles
+                        
+                        if count > 0:
+                            st.success(f"✅ {count} paiements importés avec succès !")
+                            st.rerun()
+                        else:
+                            st.warning("Aucun paiement valide trouvé (Vérifiez les colonnes).")
+                            
+                except Exception as e:
+                    st.error(f"Erreur de lecture : {e}")
+        # -------------------------------------------
+
+        st.markdown("#### Saisie Manuelle")
         with st.form("ajout_pre"):
             d_p = st.date_input("Date du Virement", date(2024, 1, 1), format="DD/MM/YYYY") 
             m_p = st.number_input("Montant TTC (€)", step=100.0)
@@ -304,7 +334,7 @@ with tab1:
         
         if not has_paiements:
             st.info("👋 **En attente de vos données...**")
-            st.markdown("Pour calculer votre créance exacte, saisissez vos encaissements à gauche ou cochez la case ci-dessous.")
+            st.markdown("Pour calculer votre créance exacte, saisissez vos encaissements à gauche (Manuellement ou via Import), ou cochez la case ci-dessous.")
             no_payment_check = st.checkbox("Je certifie n'avoir reçu AUCUN paiement (Impayé total)", key="check_no_pay_pre")
             if not no_payment_check:
                 st.stop()
@@ -468,7 +498,6 @@ with tab1:
         
         st.download_button("📄 TÉLÉCHARGER PDF DÉCLARATION (COMPLET)", pdf.output(dest='S').encode('latin-1'), "declaration_creance_albion.pdf", "application/pdf")
 
-        # --- APPEL A L'ACTION VERS ONGLET 2 (MODIFICATION DEMANDÉE) ---
         st.success("✅ **Étape 1 terminée !**")
         st.markdown("""
         ⚠️ **ATTENTION : Ce n'est pas fini !**
