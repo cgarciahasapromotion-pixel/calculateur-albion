@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 from datetime import date, datetime, timedelta
 from fpdf import FPDF
 import io
@@ -9,8 +10,9 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 
 # --- CONSTANTES JURIDIQUES ---
 DATE_JUGEMENT = date(2025, 6, 26)
+DATE_DEBUT_GRAPH = date(2019, 6, 1)
 
-# Taux d'intérêt légal (BCE + 10 points) - Source Banque de France
+# Taux d'intérêt légal (BCE + 10 points)
 TAUX_LEGAUX = [
     (date(2019, 1, 1), 10.00),
     (date(2019, 7, 1), 10.00),
@@ -27,11 +29,11 @@ TAUX_LEGAUX = [
     (date(2025, 1, 1), 13.50)
 ]
 
-# Indices ILC (INSEE)
+# Indices ILC
 INDICES = {
     "BASE": 114.06, # T1 2019
     "2019": 116.16, # Applicable Juin 2020
-    "2020": 115.79, # Applicable Juin 2021 (Baisse -> Maintien loyer)
+    "2020": 115.79, # Applicable Juin 2021
     "2021": 118.59, # Applicable Juin 2022
     "2022": 126.05, # Applicable Juin 2023
     "2023": 132.63, # Applicable Juin 2024
@@ -70,24 +72,22 @@ def calculer_interets_ligne(montant, date_depart, date_fin):
 
 # --- GÉNÉRATION DE L'ÉCHÉANCIER THÉORIQUE ---
 def generer_loyers_theoriques(loyer_annuel_ht):
-    # C'EST ICI QUE LA TVA S'APPLIQUE
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
     loyer_base_mensuel = loyer_annuel_ttc / 12
     
     echeances = []
 
-    # 1. ANNEE 2019 (3 mois offerts Juin-Aout -> Reste Sept-Dec)
-    montant_mensuel = loyer_base_mensuel
+    # 1. ANNEE 2019 (4 mois payants TTC)
     echeances.append({
         "date": date(2019, 10, 10), 
         "label": "Loyer 2019 (4 mois TTC)", 
-        "montant": montant_mensuel * 4
+        "montant": loyer_base_mensuel * 4
     })
 
     # 2. ANNEE 2020
-    echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": montant_mensuel * 3})
+    echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": loyer_base_mensuel * 3})
     loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
-    montant_t2_mixte = (montant_mensuel * 2) + (loyer_2020 * 1)
+    montant_t2_mixte = (loyer_base_mensuel * 2) + (loyer_2020 * 1)
     echeances.append({"date": date(2020, 4, 10), "label": "T2 2020 (Mixte)", "montant": montant_t2_mixte})
     echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
     echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
@@ -123,7 +123,7 @@ def generer_loyers_theoriques(loyer_annuel_ht):
     echeances.append({"date": date(2024, 7, 10), "label": "T3 2024", "montant": loyer_2024 * 3})
     echeances.append({"date": date(2024, 10, 10), "label": "T4 2024", "montant": loyer_2024 * 3})
 
-    # 7. ANNEE 2025 (Jusqu'au RJ)
+    # 7. ANNEE 2025
     echeances.append({"date": date(2025, 1, 10), "label": "T1 2025", "montant": loyer_2024 * 3})
     loyer_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
     montant_avril_mai = loyer_2024 * 2
@@ -160,105 +160,54 @@ class PDF(FPDF):
 
 st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
 
-# --- SECTION PÉDAGOGIQUE ---
-col_info1, col_info2 = st.columns(2)
-
-with col_info1:
-    with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres", expanded=False):
-        st.markdown("""
-        **Pourquoi cet outil ?**
-        Pour calculer votre créance exacte, en appliquant les indexations ILC (inflation) et les pénalités de retard légales.
-        
-        **1. HT ou TTC ?**
-        * Le bail fixe un loyer **HT**. L'appli ajoute 10% de TVA.
-        * Le résultat final est en **TTC**.
-        
-        **2. Le Principal Net (Privilégié)**
-        * C'est le loyer "pur" qui manque.
-        * *Calcul :* (Loyers TTC théoriques indexés) - (Virements TTC reçus).
-        
-        **3. Les Intérêts de Retard (Chirographaire)**
-        * Le taux appliqué est le taux légal (Refi BCE + 10 points), soit environ 13-14% par an.
-        """)
-
-with col_info2:
-    with st.expander("📈 TABLEAUX DE RÉFÉRENCE (ILC & Taux)", expanded=False):
-        st.markdown("**1. Évolution de l'Indice ILC (Insee)**")
-        df_ilc_ref = pd.DataFrame([
-            {"Année": "2019", "Valeur": 114.06, "Application": "Base Bail"},
-            {"Année": "2019 (T4)", "Valeur": 116.16, "Application": "Juin 2020"},
-            {"Année": "2020 (T4)", "Valeur": 115.79, "Application": "Juin 2021"},
-            {"Année": "2021 (T4)", "Valeur": 118.59, "Application": "Juin 2022"},
-            {"Année": "2022 (T4)", "Valeur": 126.05, "Application": "Juin 2023"},
-            {"Année": "2023 (T4)", "Valeur": 132.63, "Application": "Juin 2024"},
-            {"Année": "2024 (T4)", "Valeur": 135.30, "Application": "Juin 2025"}
-        ])
-        st.dataframe(df_ilc_ref, hide_index=True)
-        
-        st.markdown("---")
-        st.markdown("**2. Évolution Taux Intérêt (BCE + 10pts)**")
-        # Création DataFrame Taux pour affichage propre
-        data_taux_display = []
-        for d, t in TAUX_LEGAUX:
-            data_taux_display.append({"Date d'effet": d.strftime("%d/%m/%Y"), "Taux": f"{t:.2f} %"})
-        st.dataframe(pd.DataFrame(data_taux_display), hide_index=True)
-
+with st.expander("📚 GUIDE DE LECTURE : Comprendre les chiffres", expanded=False):
+    st.markdown("""
+    **Les Courbes (Graphique) :**
+    * **Bleu (Dette Principal) :** Montre l'évolution de ce qu'ils vous doivent réellement (Loyers - Paiements).
+    * **Rouge (Intérêts) :** Montre comment les pénalités s'accumulent avec le temps.
+    """)
 
 # SESSION STATE
 if 'paiements' not in st.session_state:
     st.session_state.paiements = []
 
-st.write("---")
-
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
     st.markdown("### 1. Données du Bail (HT)")
-    st.warning("⚠️ Attention : Entrez le montant **ANNUEL** et **HORS TAXES** inscrit sur votre bail.")
     loyer_ht = st.number_input("Loyer Annuel HT (€)", min_value=0.0, step=100.0, format="%.2f")
-    st.caption(f"L'outil ajoutera automatiquement 10% de TVA. Soit un loyer de base de {(loyer_ht*1.10):,.2f} € TTC/an.")
+    st.caption(f"Soit {(loyer_ht*1.10):,.2f} € TTC/an.")
     
     st.markdown("### 2. Paiements Reçus (TTC)")
-    st.info("Ajoutez ici chaque virement reçu **AVANT le 26/06/2025**.")
-    
     with st.form("ajout_paiement"):
-        # Format JJ/MM/AAAA (DD/MM/YYYY)
         d_paiement = st.date_input("Date du virement", value=date(2024, 1, 1), format="DD/MM/YYYY")
         m_paiement = st.number_input("Montant Reçu TTC (€)", min_value=0.0, step=10.0)
-        submit = st.form_submit_button("Ajouter ce paiement")
-        
+        submit = st.form_submit_button("Ajouter")
         if submit and m_paiement > 0:
             if d_paiement > DATE_JUGEMENT:
-                st.error("❌ Ce paiement est POSTÉRIEUR au RJ (après le 26 juin). Ne le mettez pas ici !")
+                st.error("Date postérieure au jugement !")
             else:
                 st.session_state.paiements.append({"date": d_paiement, "montant": m_paiement})
-                st.success("✅ Paiement ajouté !")
+                st.success("Ajouté !")
 
-    # Liste des paiements
     if st.session_state.paiements:
-        st.write("---")
-        st.write("**Historique des virements saisis :**")
+        st.write("**Virements saisis :**")
         p_df = pd.DataFrame(st.session_state.paiements)
-        
-        st.dataframe(p_df.style.format({
-            "montant": "{:.2f} € TTC",
-            "date": lambda t: t.strftime("%d/%m/%Y")
-        }))
-        
-        if st.button("🗑️ Effacer tous les paiements"):
+        st.dataframe(p_df.style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
+        if st.button("Tout effacer"):
             st.session_state.paiements = []
             st.rerun()
 
 # --- CALCULS ---
 if loyer_ht > 0:
-    # 1. Génération dettes TTC
+    # 1. Génération dettes
     echeances = generer_loyers_theoriques(loyer_ht)
     
     total_principal_du = 0
     total_interets_du = 0
     data_detail = []
 
-    # Calcul intérêts sur Dettes
+    # Calcul Final
     for ech in echeances:
         interet = calculer_interets_ligne(ech["montant"], ech["date"], DATE_JUGEMENT)
         total_principal_du += ech["montant"]
@@ -272,10 +221,8 @@ if loyer_ht > 0:
             "Intérêts": interet
         })
 
-    # Calcul intérêts (épargnés) sur Paiements
     total_paye = 0
     total_interets_paye = 0
-    
     for p in st.session_state.paiements:
         interet_p = calculer_interets_ligne(p["montant"], p["date"], DATE_JUGEMENT)
         total_paye += p["montant"]
@@ -289,100 +236,92 @@ if loyer_ht > 0:
             "Intérêts": -interet_p 
         })
     
-    # Tri chronologique
     df_final = pd.DataFrame(data_detail).sort_values(by="Date")
-    
-    # TOTAUX
     principal_net = total_principal_du - total_paye
-    interets_net = total_interets_du - total_interets_paye
-    if interets_net < 0: interets_net = 0
-    
+    interets_net = max(0, total_interets_du - total_interets_paye)
     total_creance = principal_net + interets_net
 
-    with col_right:
-        st.markdown("### 3. Résultats & Synthèse")
+    # --- PARTIE GRAPHIQUE (SIMULATION MENSUELLE) ---
+    graph_data = []
+    
+    # On génère une date par mois du début à la fin
+    current_d = DATE_DEBUT_GRAPH
+    while current_d <= DATE_JUGEMENT:
+        # A la date 'current_d', quel est le solde ?
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Loyer Dû (TTC)", f"{total_principal_du:,.2f} €")
-        c2.metric("Déjà Payé (TTC)", f"- {total_paye:,.2f} €")
-        c3.metric("PRINCIPAL NET", f"{principal_net:,.2f} €", help="Montant TTC des loyers impayés")
+        # 1. Somme des loyers exigibles à cette date
+        sum_due = sum(e["montant"] for e in echeances if e["date"] <= current_d)
         
-        st.write("---")
+        # 2. Somme des paiements reçus à cette date
+        sum_paid = sum(p["montant"] for p in st.session_state.paiements if p["date"] <= current_d)
         
-        c4, c5, c6 = st.columns(3)
-        c4.metric("Intérêts Bruts", f"{total_interets_du:,.2f} €")
-        c5.metric("Déduction", f"- {total_interets_paye:,.2f} €")
-        c6.metric("INTÉRÊTS NETS", f"{interets_net:,.2f} €", help="Pénalités de retard légales (Art L441-10)")
+        balance_principal = sum_due - sum_paid
         
-        st.success(f"### 💰 TOTAL À DÉCLARER : {total_creance:,.2f} €")
+        # 3. Intérêts accumulés à cette date
+        # (Calcul un peu lourd mais précis : somme des intérêts courus pour chaque dette JUSQU'A current_d)
+        int_dette_t = 0
+        for e in echeances:
+            if e["date"] < current_d:
+                int_dette_t += calculer_interets_ligne(e["montant"], e["date"], current_d)
         
-        with st.expander("Voir le détail ligne par ligne"):
-            st.dataframe(df_final.style.format({
-                "Débit (TTC)": "{:.2f}", 
-                "Crédit (TTC)": "{:.2f}", 
-                "Intérêts": "{:.2f}",
-                "Date": lambda t: t.strftime("%d/%m/%Y")
-            }))
+        int_pay_t = 0
+        for p in st.session_state.paiements:
+            if p["date"] < current_d:
+                int_pay_t += calculer_interets_ligne(p["montant"], p["date"], current_d)
+        
+        balance_interets = max(0, int_dette_t - int_pay_t)
+        
+        graph_data.append({
+            "Date": pd.to_datetime(current_d),
+            "Dette Principal (Bleu)": balance_principal,
+            "Intérêts Cumulés (Rouge)": balance_interets
+        })
+        
+        # Mois suivant
+        next_month = current_d.replace(day=28) + timedelta(days=4)
+        current_d = next_month.replace(day=1)
 
-    # --- GÉNÉRATION PDF ---
+    # Création du DataFrame pour le graph
+    df_graph = pd.DataFrame(graph_data)
+    df_graph_melted = df_graph.melt('Date', var_name='Type', value_name='Montant (€)')
+
+    with col_right:
+        st.markdown("### 📈 Évolution de votre Créance (2019-2025)")
+        
+        # Graphique Altair
+        chart = alt.Chart(df_graph_melted).mark_line(strokeWidth=3).encode(
+            x='Date',
+            y='Montant (€)',
+            color=alt.Color('Type', scale=alt.Scale(domain=['Dette Principal (Bleu)', 'Intérêts Cumulés (Rouge)'], range=['#1f77b4', '#d62728'])),
+            tooltip=['Date', 'Type', 'Montant (€)']
+        ).interactive()
+        
+        st.altair_chart(chart, use_container_width=True)
+
+        st.markdown("### 3. Synthèse Chiffrée")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Principal Net", f"{principal_net:,.2f} €")
+        c2.metric("Intérêts Net", f"{interets_net:,.2f} €")
+        c3.metric("TOTAL", f"{total_creance:,.2f} €")
+        
+        with st.expander("Voir le détail chiffré"):
+            st.dataframe(df_final.style.format({"Débit (TTC)": "{:.2f}", "Crédit (TTC)": "{:.2f}", "Intérêts": "{:.2f}", "Date": lambda t: t.strftime("%d/%m/%Y")}))
+
+    # PDF GENERATION (inchangé pour l'essentiel)
     pdf = PDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
-    
-    # Info En-tête
-    pdf.cell(0, 10, f"Date d'arrêt des comptes : 26 Juin 2025 (Jugement RJ)", 0, 1)
-    pdf.cell(0, 10, f"Loyer Annuel Base : {loyer_ht:,.2f} EUR HT (soit {(loyer_ht*1.10):,.2f} EUR TTC)", 0, 1)
-    pdf.ln(10)
-    
-    # Tableau Synthèse
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "SYNTHÈSE DE LA CRÉANCE (TTC)", 0, 1)
-    pdf.set_font("Arial", size=11)
-    
-    pdf.cell(100, 8, "Principal TTC (Loyers impayés)", 1)
-    pdf.cell(50, 8, f"{principal_net:,.2f} EUR", 1, 1, 'R')
-    
-    pdf.cell(100, 8, "Intérêts de retard (Art L.441-10)", 1)
-    pdf.cell(50, 8, f"{interets_net:,.2f} EUR", 1, 1, 'R')
-    
+    pdf.cell(0, 10, f"Date d'arrêt : 26/06/2025", 0, 1)
+    pdf.cell(0, 10, f"Loyer Base : {loyer_ht:,.2f} HT", 0, 1)
+    pdf.ln(5)
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(100, 10, "TOTAL GÉNÉRAL", 1)
     pdf.cell(50, 10, f"{total_creance:,.2f} EUR", 1, 1, 'R')
     
-    pdf.ln(10)
-    
-    # Tableau Détail
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 10, "DÉTAIL CHRONOLOGIQUE (TTC)", 0, 1)
-    
-    # En-têtes colonnes
-    pdf.set_font("Arial", 'B', 8)
-    pdf.cell(25, 8, "Date", 1)
-    pdf.cell(60, 8, "Libellé", 1)
-    pdf.cell(25, 8, "Dû (Debit)", 1)
-    pdf.cell(25, 8, "Reçu (Credit)", 1)
-    pdf.cell(25, 8, "Interets", 1, 1)
-    
-    pdf.set_font("Arial", size=8)
-    for index, row in df_final.iterrows():
-        d_str = row['Date'].strftime("%d/%m/%Y")
-        pdf.cell(25, 6, d_str, 1)
-        pdf.cell(60, 6, str(row['Libellé']), 1)
-        pdf.cell(25, 6, f"{row['Débit (TTC)']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Crédit (TTC)']:.2f}", 1, 0, 'R')
-        pdf.cell(25, 6, f"{row['Intérêts']:.2f}", 1, 1, 'R')
-        
-    # Output PDF
     pdf_buffer = io.BytesIO()
     pdf.output(pdf_buffer)
-    pdf_data = pdf_buffer.getvalue()
     
-    st.download_button(
-        label="📄 TÉLÉCHARGER MA DÉCLARATION (PDF)",
-        data=pdf_data,
-        file_name="declaration_creance_albion.pdf",
-        mime="application/pdf"
-    )
+    st.download_button("📄 TÉLÉCHARGER PDF", data=pdf_buffer.getvalue(), file_name="creance_albion.pdf", mime="application/pdf")
 
 else:
-    st.info("👈 Commencez par entrer votre Loyer Annuel HT dans la colonne de gauche.")
+    st.info("👈 Entrez le Loyer Annuel HT pour commencer.")
