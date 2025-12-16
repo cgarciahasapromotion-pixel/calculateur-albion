@@ -4,6 +4,7 @@ import altair as alt
 from datetime import date, datetime, timedelta
 from fpdf import FPDF
 import io
+import json
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️", layout="wide")
@@ -11,6 +12,7 @@ st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️",
 # --- CONSTANTES JURIDIQUES & DONNÉES ---
 DATE_JUGEMENT = date(2025, 6, 26)
 DATE_DEBUT_GRAPH = date(2019, 6, 1)
+INDEMNITE_FORFAITAIRE = 40.0 # Art. D.441-5 du Code de commerce
 
 # Taux d'intérêt légal (BCE + 10 points) - Source : Banque de France (L441-10)
 TAUX_LEGAUX = [
@@ -39,6 +41,13 @@ INDICES = {
     "2023": 132.63, # T4 2023
     "2024": 135.30  # T4 2024
 }
+
+# --- UTILITAIRES DE SAUVEGARDE (JSON) ---
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError ("Type %s not serializable" % type(obj))
 
 # --- FONCTIONS MOTEUR ---
 
@@ -164,22 +173,45 @@ class PDF(FPDF):
 # INTERFACE UTILISATEUR (STREAMLIT)
 # ==========================================
 
+# --- VOLET LATÉRAL : SAUVEGARDE / CHARGEMENT ---
+with st.sidebar:
+    st.header("💾 Sauvegarde & Reprise")
+    st.info("Utilisez cette fonction pour sauvegarder votre travail et le reprendre plus tard sans tout ressaisir.")
+    
+    # CHARGEMENT
+    uploaded_file = st.file_uploader("📂 Charger un dossier (.json)", type=["json"])
+    if uploaded_file is not None:
+        try:
+            data = json.load(uploaded_file)
+            st.session_state.paiements = []
+            for p in data.get("paiements", []):
+                # Conversion str -> date
+                st.session_state.paiements.append({
+                    "date": datetime.strptime(p["date"], "%Y-%m-%d").date(),
+                    "montant": p["montant"]
+                })
+            # On stocke temporairement le loyer pour le pré-remplir
+            st.session_state.loaded_loyer = data.get("loyer", 0.0)
+            st.success("Données chargées ! (Vérifiez le montant du loyer)")
+        except Exception as e:
+            st.error(f"Erreur lecture fichier : {e}")
+
 st.title("🏛️ Calculateur de Créance - Propriétaires Albion")
 
 # --- 1. SECTIONS PÉDAGOGIQUES ---
 col_info1, col_info2 = st.columns(2)
 
 with col_info1:
-    with st.expander("📚 MODE D'EMPLOI", expanded=True):
+    with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=True):
         st.markdown("""
-        **1. Renseignez votre Loyer :**
-        Entrez le montant annuel HT inscrit dans votre bail. L'outil gère la TVA.
+        **1. Méthode "Waterfall" (Art. 1343-1 C. Civil) :**
+        Les paiements remboursent **d'abord les intérêts**, puis le capital. Cela maximise le montant de votre créance privilégiée (Loyer).
         
-        **2. Ajoutez les Paiements :**
-        Entrez chaque virement reçu avant la date du jugement (26/06/2025).
+        **2. Indemnité Forfaitaire (Art. D.441-5 C. Commerce) :**
+        L'outil ajoute automatiquement **40 €** pour chaque facture (échéance) impayée ou payée en retard. C'est un droit légal (Créance Chirographaire).
         
-        **3. Téléchargez le PDF :**
-        Il contient le détail légal complet pour le mandataire judiciaire.
+        **3. Formalisme :**
+        Le PDF inclut désormais un bloc signature et les réserves d'usage (Art L.622-24) obligatoires pour la procédure.
         """)
 
 with col_info2:
@@ -205,9 +237,23 @@ col_input1, col_input2 = st.columns([1, 2])
 
 with col_input1:
     st.subheader("1. Bail (HT)")
-    loyer_ht = st.number_input("Loyer Annuel HT (€)", min_value=0.0, step=100.0, format="%.2f")
+    # Valeur par défaut si chargée depuis JSON
+    def_loyer = st.session_state.get("loaded_loyer", 0.0)
+    loyer_ht = st.number_input("Loyer Annuel HT (€)", min_value=0.0, step=100.0, value=def_loyer, format="%.2f")
+    
     if loyer_ht > 0:
         st.success(f"Soit {(loyer_ht*1.10):,.2f} € TTC/an")
+        
+        # BOUTON DE SAUVEGARDE (DANS LA COLONNE DE GAUCHE POUR ACCESSIBILITÉ)
+        st.write("---")
+        save_data = {'loyer': loyer_ht, 'paiements': st.session_state.paiements}
+        st.download_button(
+            label="💾 SAUVEGARDER MA SAISIE",
+            data=json.dumps(save_data, default=json_serial),
+            file_name=f"albion_sauvegarde_{date.today()}.json",
+            mime="application/json",
+            help="Télécharge un fichier pour reprendre plus tard"
+        )
     
     st.subheader("2. Paiements (TTC)")
     st.caption("Virements reçus AVANT le 26/06/2025")
@@ -223,6 +269,7 @@ with col_input1:
             else:
                 st.session_state.paiements.append({"date": d_paiement, "montant": m_paiement})
                 st.success("Ajouté !")
+                st.rerun() # Refresh pour afficher dans le tableau
 
     if st.session_state.paiements:
         st.markdown("**Liste des virements :**")
@@ -238,6 +285,9 @@ if loyer_ht > 0:
     echeances = generer_loyers_theoriques(loyer_ht)
     
     events = []
+    # Compteur pour l'indemnité forfaitaire (nombre d'échéances générées)
+    nombre_echeances = 0 
+    
     for ech in echeances:
         events.append({
             "date": ech["date"], 
@@ -245,6 +295,7 @@ if loyer_ht > 0:
             "montant": ech["montant"], 
             "label": ech["label"]
         })
+        nombre_echeances += 1
     
     for p in st.session_state.paiements:
         events.append({
@@ -321,28 +372,37 @@ if loyer_ht > 0:
         interets_finaux = calculer_interets_ligne(solde_principal, last_date, DATE_JUGEMENT)
         solde_interets += interets_finaux
 
+    # D. Calcul Indemnité Forfaitaire (40€ par échéance)
+    # Stratégie Expert : On applique 40€ par échéance théorique.
+    # C'est une créance Chirographaire (Art L441-6 / D441-5).
+    total_indemnites = nombre_echeances * INDEMNITE_FORFAITAIRE
+
     # Totaux
     principal_net = max(0.0, solde_principal)
     interets_net = max(0.0, solde_interets)
-    total_creance = principal_net + interets_net
+    
+    # Le total inclut maintenant l'indemnité forfaitaire
+    total_creance = principal_net + interets_net + total_indemnites
     
     df_final = pd.DataFrame(data_detail)
 
     # --- 4. AFFICHAGE RÉSULTATS (DROITE) ---
     with col_input2:
-        # NOTE PEDAGOGIQUE VISIBLE
+        # NOTE PEDAGOGIQUE
         st.info("""
-        ℹ️ **Comprendre le calcul (Art. 1343-1 Code Civil)**
-        Les paiements reçus remboursent **en priorité les intérêts de retard**. 
-        Le capital (Loyer) ne baisse que si les intérêts sont intégralement payés. 
-        Cette méthode maximise légalement votre montant Principal (Privilégié).
+        ℹ️ **Optimisation Juridique Active**
+        1. **Imputation (Art 1343-1)** : Les paiements ont d'abord remboursé les intérêts.
+        2. **Indemnité (Art D441-5)** : 40€ ajoutés par loyer (frais de recouvrement légaux).
         """)
         
         st.markdown("### 📊 Synthèse à Déclarer")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Principal (Privilégié)", f"{principal_net:,.2f} €")
-        c2.metric("Intérêts (Chiro.)", f"{interets_net:,.2f} €")
-        c3.metric("TOTAL", f"{total_creance:,.2f} €")
+        
+        # Affichage en 4 colonnes pour inclure l'indemnité
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Principal (Privilégié)", f"{principal_net:,.2f} €", help="Loyer TTC restant dû")
+        c2.metric("Intérêts (Chiro.)", f"{interets_net:,.2f} €", help="Intérêts de retard cumulés")
+        c3.metric("Indemnités 40€ (Chiro.)", f"{total_indemnites:,.2f} €", help=f"{nombre_echeances} échéances x 40€")
+        c4.metric("TOTAL GÉNÉRAL", f"{total_creance:,.2f} €")
 
         st.markdown("### 📈 Évolution de la Dette")
         
@@ -373,7 +433,7 @@ if loyer_ht > 0:
                     "Date": lambda t: t.strftime("%d/%m/%Y")
                 }))
 
-    # --- 5. GÉNÉRATION PDF AVEC EXPLICATIONS ---
+    # --- 5. GÉNÉRATION PDF OFFICIEL AMÉLIORÉ ---
     pdf = PDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
@@ -382,7 +442,7 @@ if loyer_ht > 0:
     pdf.cell(0, 8, f"Arret des comptes au : 26/06/2025 (Jugement RJ)", 0, 1)
     pdf.cell(0, 8, f"Base Loyer Annuel : {loyer_ht:,.2f} EUR HT", 0, 1)
     
-    # ENCART EXPLICATIF JURIDIQUE (NOUVEAU)
+    # ENCART EXPLICATIF JURIDIQUE
     pdf.ln(5)
     pdf.set_font("Arial", 'B', 10)
     pdf.set_fill_color(240, 240, 240)
@@ -391,7 +451,6 @@ if loyer_ht > 0:
     note_text = ("Pour maximiser la creance privilegiee du bailleur, le calcul applique strictement la loi : "
                  "tout paiement partiel recu est impute prioritairement sur les interets de retard accumules, "
                  "et subsidiairement sur le capital (Loyer).")
-    # Encodage manuel safe pour le PDF
     pdf.multi_cell(0, 5, note_text.encode('latin-1', 'replace').decode('latin-1'), 1)
     
     # TABLEAU SYNTHESE
@@ -406,6 +465,9 @@ if loyer_ht > 0:
     pdf.cell(50, 8, f"{principal_net:,.2f} EUR", 1, 1, 'R')
     pdf.cell(100, 8, "- Dont Interets (Chirographaire)", 1)
     pdf.cell(50, 8, f"{interets_net:,.2f} EUR", 1, 1, 'R')
+    # Ajout ligne Indemnité
+    pdf.cell(100, 8, f"- Dont Indemnites Recouvrement (x{nombre_echeances})", 1)
+    pdf.cell(50, 8, f"{total_indemnites:,.2f} EUR", 1, 1, 'R')
 
     # TABLEAU DES PAIEMENTS RECUS
     if st.session_state.paiements:
@@ -455,13 +517,37 @@ if loyer_ht > 0:
         pdf.cell(25, 6, f"{row['Reste Principal']:.2f}", 1, 0, 'R')
         pdf.cell(25, 6, f"{row['Reste Intérêts']:.2f}", 1, 1, 'R')
 
+    # --- PIED DE PAGE : SIGNATURE & RESERVES ---
+    pdf.ln(10)
+    pdf.set_font("Arial", '', 10)
+    
+    # Check saut de page pour ne pas couper la signature
+    if pdf.get_y() > 240:
+        pdf.add_page()
+        
+    pdf.cell(0, 5, "Certifie sincere et veritable la presente creance,", 0, 1)
+    pdf.cell(0, 5, "Arretee au 26 juin 2025 (Date du Jugement d'Ouverture).", 0, 1)
+    
+    pdf.ln(10)
+    # Cadre de signature simple
+    pdf.cell(100, 30, " Fait a : .....................................................", 0, 0) # Lieu
+    pdf.cell(90, 30, " Signature du Creancier :", 0, 1) # Signature
+    
+    # Mention de réserve OBLIGATOIRE (Art L. 622-24)
+    # On remonte un peu si nécessaire ou on écrit juste en dessous
+    pdf.set_xy(10, pdf.get_y()) 
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 8)
+    reserve_txt = "IMPORTANT : La presente declaration est faite sous reserve des loyers et charges a echoir posterieurement au jugement d'ouverture (conformement a l'Art. L. 622-24 du Code de commerce)."
+    pdf.multi_cell(0, 5, reserve_txt.encode('latin-1', 'replace').decode('latin-1'), 0, 'C')
+
     # DOWNLOAD
     pdf_content = pdf.output(dest='S').encode('latin-1')
     
     st.download_button(
-        label="📄 TÉLÉCHARGER DÉCLARATION CRÉANCE (PDF)",
+        label="📄 TÉLÉCHARGER DÉCLARATION OFFICIELLE (PDF)",
         data=pdf_content,
-        file_name="declaration_creance_albion_expliquee.pdf",
+        file_name="declaration_creance_albion_complet.pdf",
         mime="application/pdf"
     )
 
