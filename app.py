@@ -259,6 +259,27 @@ with tab1:
     # CONTENEUR VISUEL BLEU POUR MARQUER LA DIFFERENCE
     st.info("### 🟦 ESPACE DÉCLARATION DE CRÉANCE\n\nConcerne uniquement les loyers et dettes **AVANT le jugement (26 Juin 2025)**.")
     
+    # --- RESTAURATION DES TEXTES LEGAUX (ACCORDEONS) ---
+    col_legal_1, col_legal_2 = st.columns(2)
+    with col_legal_1:
+        with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=True):
+             st.markdown("""
+            **1. Méthode "Waterfall" (Art. 1343-1 C. Civil) :**
+            Les paiements remboursent **d'abord les intérêts**, puis le capital.
+            
+            **2. Indemnité Forfaitaire (Art. D.441-5) :**
+            +40 € ajoutés automatiquement pour chaque impayé.
+            
+            **3. Signature :**
+            Le PDF inclut la mention "Certifié sincère" et les réserves d'usage.
+            """)
+    with col_legal_2:
+        with st.expander("📈 TABLEAUX DE RÉFÉRENCE", expanded=False):
+            st.markdown("**Indices ILC & Taux Intérêts**")
+            st.dataframe(pd.DataFrame(list(INDICES.items()), columns=["Année", "Indice"]), hide_index=True)
+
+    st.write("---")
+
     c1, c2 = st.columns([1, 2])
     with c1:
         st.markdown("#### Saisie des Paiements (Passé)")
@@ -329,6 +350,24 @@ with tab1:
         cols[1].metric("Intérêts (Chiro.)", f"{int_net:,.2f} €")
         cols[2].metric("Indemnités (Chiro.)", f"{indemnite:,.2f} €")
         
+        # --- RESTAURATION DU GRAPHIQUE ---
+        st.write("---")
+        if data_detail:
+            df_final = pd.DataFrame(data_detail)
+            df_graph = df_final[["Date", "R_Princ", "R_Int"]].copy()
+            df_graph.rename(columns={"R_Princ": "Dette Principal", "R_Int": "Intérêts Cumulés"}, inplace=True)
+            df_graph.loc[len(df_graph)] = [DATE_JUGEMENT, princ_net, int_net]
+            df_graph_melted = df_graph.melt('Date', var_name='Type', value_name='Montant (€)')
+
+            chart = alt.Chart(df_graph_melted).mark_line(strokeWidth=3, interpolate='step-after').encode(
+                x=alt.X('Date', axis=alt.Axis(format='%d/%m/%Y')),
+                y=alt.Y('Montant (€)'),
+                color=alt.Color('Type', scale=alt.Scale(range=['#1f77b4', '#d62728'])),
+                tooltip=['Date', 'Type', 'Montant (€)']
+            )
+            st.altair_chart(chart.interactive(), use_container_width=True)
+        # ---------------------------------
+
         # PDF GENERATION
         pdf = PDFDeclaration()
         pdf.add_page()
