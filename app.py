@@ -189,7 +189,7 @@ with col_info1:
         
         **3. Intérêts de Retard (Créance Chirographaire)**
         * Pénalité légale (Art L441-10 Commerce).
-        * *Taux :* BCE + 10 points (approx. 13-14% / an).
+        * *Taux :* BCE + 10 points (environ 13% à 14% par an).
         * Ils s'accumulent chaque jour de retard.
 
         **4. Le Graphique :**
@@ -210,8 +210,16 @@ with col_info2:
             {"Année": "2025", "Valeur": 135.30}
         ])
         st.dataframe(df_ilc_ref, hide_index=True)
+        
         st.markdown("**Taux Intérêt (BCE + 10pts)**")
-        st.caption("Ex: 14.75% au 01/01/2024")
+        # --- AJOUT ICI : Génération du tableau des taux ---
+        data_taux_display = []
+        for d, t in TAUX_LEGAUX:
+            data_taux_display.append({
+                "Date d'effet": d.strftime("%d/%m/%Y"),
+                "Taux Annuel": f"{t:.2f} %"
+            })
+        st.dataframe(pd.DataFrame(data_taux_display), hide_index=True)
 
 # --- 2. SAISIE DES DONNÉES ---
 if 'paiements' not in st.session_state:
