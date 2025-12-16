@@ -130,7 +130,7 @@ def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
 
     return echeances
 
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - MODIFIÉ TERME ÉCHU) ---
+# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - TERME ÉCHU) ---
 def generer_loyers_post_rj(loyer_annuel_ht):
     """Génère les loyers à partir du 27/06/2025 (PAYABLES À TERME ÉCHU)"""
     loyer_annuel_ttc = loyer_annuel_ht * 1.10
@@ -142,7 +142,6 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     
     # 1. Solde Juin 2025 (27 au 30 juin)
     # T2 (Avril-Mai-Juin) payable terme échu -> Juillet.
-    # Donc le solde de juin est exigible début Juillet.
     montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
     echeances.append({
         "date": date(2025, 7, 10), # Exigible en Juillet
@@ -276,8 +275,14 @@ with tab1:
             """)
     with col_legal_2:
         with st.expander("📈 TABLEAUX DE RÉFÉRENCE", expanded=False):
-            st.markdown("**Indices ILC & Taux Intérêts**")
+            st.markdown("**Indices ILC**")
             st.dataframe(pd.DataFrame(list(INDICES.items()), columns=["Année", "Indice"]), hide_index=True)
+            
+            # --- AJOUT DU TABLEAU DES TAUX ICI ---
+            st.markdown("**Taux Intérêts (BCE + 10pts)**")
+            data_taux = [{"Date": d.strftime("%d/%m/%Y"), "Taux": f"{t:.2f} %"} for d, t in TAUX_LEGAUX]
+            st.dataframe(pd.DataFrame(data_taux), hide_index=True)
+            # -------------------------------------
 
     st.write("---")
 
