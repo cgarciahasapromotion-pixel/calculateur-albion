@@ -1,5 +1,6 @@
 streamlit
 pandas
+altair
 fpdf
 Pillow
-altair
+pypdf
