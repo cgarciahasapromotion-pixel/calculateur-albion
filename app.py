@@ -11,7 +11,7 @@ from PIL import Image
 from pypdf import PdfWriter, PdfReader
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V4.0", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V4.1", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -141,7 +141,7 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     return echeances
 
 # ==========================================
-# CLASS PDF 1 : LE DOSSIER COMPLET
+# CLASS PDF 1 : LE DOSSIER COMPLET (Tab 1)
 # ==========================================
 class DossierJuridiquePDF(FPDF):
     def __init__(self, user_info):
@@ -192,7 +192,6 @@ class DossierJuridiquePDF(FPDF):
         
         self.multi_cell(0, 6, intro.encode('latin-1', 'replace').decode('latin-1'))
         
-        # --- AMÉLIORATION POINT 2 : TEXTE RENFORCÉ ART 1353 ---
         self.set_font("Arial", 'B', 11)
         mention_3 = ("3. En application de l'art. 1353 du Code Civil, je mets le debiteur en demeure de produire "
                      "les releves de compte bancaires certifies attestant du debit des sommes qu'il pretend avoir versees. "
@@ -226,19 +225,17 @@ class DossierJuridiquePDF(FPDF):
         self.cell(100, 10, "TOTAL GENERAL A ADMETTRE", 1, 0, 'R')
         self.cell(40, 10, f"{total_global:,.2f} EUR", 1, 1, 'R')
         
-        # --- AMÉLIORATION POINT 1 : MENTION DATE LIMITE ---
         self.ln(2)
         self.set_font("Arial", 'BI', 9)
-        self.set_text_color(200, 0, 0) # Rouge pour l'alerte
+        self.set_text_color(200, 0, 0)
         txt_arret = "Arret des comptes au jour du Jugement d'Ouverture (26/06/2025). Les loyers posterieurs sont dus au comptant."
         self.cell(0, 6, txt_arret.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.set_text_color(0, 0, 0) # Reset Noir
+        self.set_text_color(0, 0, 0)
 
         self.ln(5)
         self.set_font("Arial", '', 11)
         self.cell(0, 10, "Dans l'attente de votre retour, je vous prie d'agreer, Maitre, mes salutations distinguees.", 0, 1)
         
-        # --- AMÉLIORATION POINT 4 : ENCART RIB ---
         self.ln(5)
         iban = self.user_info.get('iban', '')
         bic = self.user_info.get('bic', '')
@@ -246,7 +243,7 @@ class DossierJuridiquePDF(FPDF):
             self.set_fill_color(230, 230, 250)
             self.set_font("Arial", 'B', 10)
             self.cell(0, 8, "COORDONNEES BANCAIRES POUR REGLEMENT (RIB):", 1, 1, 'L', fill=True)
-            self.set_font("Courier", '', 10) # Police monospace pour l'IBAN
+            self.set_font("Courier", '', 10)
             self.cell(0, 6, f"IBAN : {iban}", 'LR', 1)
             self.cell(0, 6, f"BIC  : {bic}", 'LBR', 1)
 
@@ -260,7 +257,6 @@ class DossierJuridiquePDF(FPDF):
         self.cell(0, 10, "DETAIL DU CALCUL FINANCIER", 0, 1, 'C')
         self.ln(5)
         
-        # I. RECAP PAIEMENTS
         self.set_font("Arial", 'B', 11)
         self.set_fill_color(230, 230, 230)
         self.cell(0, 8, "I. RECAPITULATIF DES VIREMENTS PERCUS (A DEDUIRE)", 1, 1, 'L', fill=True)
@@ -287,7 +283,6 @@ class DossierJuridiquePDF(FPDF):
         
         self.ln(8)
 
-        # II. CASCADE
         self.set_font("Arial", 'B', 11)
         self.cell(0, 8, "II. DETAIL DU CALCUL (CASCADE - Art. 1343-1 CC)", 1, 1, 'L', fill=True)
         self.ln(2)
@@ -370,7 +365,6 @@ class DossierJuridiquePDF(FPDF):
                 self.cell(50, 8, f"{t['montant']:.2f} EUR", 1, 1, 'R')
             self.ln(10)
         
-        # --- AMÉLIORATION POINT 3 : Note de lecture pour les images ---
         self.set_font("Arial", 'I', 10)
         self.set_text_color(100, 100, 100)
         self.multi_cell(0, 5, "Note de lecture: Veuillez vous referer a la ligne 'Taxe d'enlevement des ordures menageres' sur les avis ci-joints. Seule cette ligne est reclamee.")
@@ -393,21 +387,98 @@ class DossierJuridiquePDF(FPDF):
                 self.cell(0, 10, f"Erreur affichage image : {str(e)}", 0, 1)
 
 # ==========================================
-# CLASS PDF 2 : LA RELANCE (Tab 2)
+# CLASS PDF 2 : LA RELANCE (MISE A JOUR V4.1)
 # ==========================================
 class PDFRelance(FPDF):
+    def __init__(self, user_info):
+        super().__init__()
+        self.user_info = user_info
+
     def header(self):
-        self.set_font('Arial', 'B', 14)
-        txt = 'MISE EN DEMEURE - LOYERS POSTERIEURS'
-        self.cell(0, 10, txt.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.set_font('Arial', 'I', 9)
-        txt2 = '(Article L. 622-17 du Code de commerce)'
-        self.cell(0, 10, txt2.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
+        # Header simple sur chaque page
+        self.set_font('Arial', 'I', 8)
+        self.set_text_color(100, 100, 100)
+        self.cell(0, 8, f"Relance Loyers Post-RJ - HOTEL ALBION - Lot {self.user_info.get('lot', '?')}", 0, 0, 'L')
+        self.cell(0, 8, f"Proprietaire : {self.user_info.get('nom', 'N/A')}", 0, 1, 'R')
         self.ln(5)
+        self.set_text_color(0, 0, 0)
+
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+        
+    def generate_letter(self, total_a_reclamer, table_rows):
+        self.add_page()
+        
+        # TITRE AGRESSIF
+        self.set_font("Arial", 'B', 14)
+        self.cell(0, 10, "MISE EN DEMEURE DE PAYER SOUS HUITAINE", 0, 1, 'C')
+        self.set_font("Arial", 'B', 10)
+        self.cell(0, 6, "(Loyers posterieurs au Jugement d'Ouverture - Art. L.622-17 Code de commerce)", 0, 1, 'C')
+        self.ln(10)
+        
+        self.set_font("Arial", '', 10)
+        self.cell(0, 5, f"Date : {date.today().strftime('%d/%m/%Y')}", 0, 1, 'R')
+        self.ln(10)
+
+        # INTRO JURIDIQUE
+        txt_intro = ("Maitre,\n\n"
+                     "En votre qualite d'Administrateur Judiciaire de la SAS ALBION, je vous notifie par la presente "
+                     "le non-paiement partiel des loyers courants, dus au titre de l'occupation des locaux posterieurement au jugement d'ouverture.\n\n"
+                     "Conformement aux dispositions de l'article L.622-17 I du Code de commerce, ces creances nees regulierement "
+                     "apres le jugement pour les besoins de la procedure doivent etre payees a leur echeance.")
+        self.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
+        self.ln(5)
+        
+        # TABLEAU
+        self.set_font("Arial", 'B', 10)
+        self.cell(30, 6, "Echeance", 1)
+        self.cell(70, 6, "Libelle", 1)
+        self.cell(30, 6, "Montant", 1)
+        self.cell(30, 6, "Reste Du", 1, 1)
+        
+        self.set_font("Arial", '', 10)
+        for row in table_rows:
+            if row["Reste Dû"] > 0 and row["Échéance"] <= date.today():
+                 self.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
+                 self.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1')[:35], 1)
+                 self.cell(30, 6, f"{row['Montant']:.2f}", 1, 0, 'R')
+                 # Reste dû en GRAS
+                 self.set_font("Arial", 'B', 10)
+                 self.cell(30, 6, f"{row['Reste Dû']:.2f}", 1, 1, 'R')
+                 self.set_font("Arial", '', 10)
+        
+        self.ln(8)
+        
+        # MENACE (CLAUSE RESOLUTOIRE)
+        self.set_font("Arial", 'B', 10)
+        self.set_text_color(150, 0, 0) # Rouge foncé
+        txt_menace = (f"A defaut de reglement integral de la somme de {total_a_reclamer:,.2f} EUR sous un delai de 8 jours a compter de la reception de la presente :\n"
+                      "- Je saisirai Monsieur le Juge-Commissaire pour constater la resiliation de plein droit du bail commercial (Article L.622-14 du Code de commerce).\n"
+                      "- Ce defaut de paiement caracterisera l'impossibilite pour l'entreprise de financer sa periode d'observation, justifiant une conversion en Liquidation Judiciaire.\n"
+                      "- Le present courrier vaut mise en demeure formelle et fait courir les interets legaux.")
+        self.multi_cell(0, 5, txt_menace.encode('latin-1','replace').decode('latin-1'))
+        self.set_text_color(0, 0, 0)
+        
+        self.ln(10)
+        
+        # RIB
+        iban = self.user_info.get('iban', '')
+        if iban:
+            self.set_font("Arial", 'B', 10)
+            self.cell(0, 6, "Reglement par virement exclusivement sur le compte suivant :", 0, 1)
+            self.set_font("Courier", '', 10)
+            self.cell(0, 6, f"IBAN : {iban}  |  BIC : {self.user_info.get('bic', '')}", 1, 1, 'C')
+            self.ln(5)
+
+        self.set_font("Arial", '', 10)
+        self.cell(0, 10, "Signature :", 0, 1, 'R')
+        
+        # COPIES
+        self.set_y(-30)
+        self.set_font("Arial", 'I', 8)
+        self.cell(0, 5, "Copie pour information a : Monsieur le Mandataire Judiciaire et M. MICHEL (Controleur).", 0, 1)
 
 # ==========================================
 # INTERFACE STREAMLIT
@@ -442,13 +513,12 @@ with st.sidebar:
             st.session_state.loaded_loyer = data.get("loyer", 0.0)
             if "identity" in data:
                 id_nom = data["identity"].get("nom", "")
-                # On pourrait charger iban/bic ici si sauvegardés
             st.success("Dossier chargé !")
         except:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V4.0")
+st.title("🏛️ Gestionnaire Créance Albion V4.1")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -708,30 +778,11 @@ with tab2:
         
         if total_a_reclamer > 0:
             if st.button("📩 GÉNÉRER MISE EN DEMEURE (PDF)"):
-                pdf_r = PDFRelance()
-                pdf_r.add_page()
-                pdf_r.set_font("Arial", '', 10)
-                pdf_r.cell(0, 5, f"Date : {date.today().strftime('%d/%m/%Y')}", 0, 1, 'R')
-                pdf_r.ln(10)
-                pdf_r.set_font("Arial", 'B', 10)
-                pdf_r.cell(0, 5, "Objet : Mise en demeure de payer les loyers posterieurs (Art L.622-17)", 0, 1)
-                pdf_r.ln(5)
-                pdf_r.set_font("Arial", '', 10)
-                txt_intro = ("Maitre,\n\nConformement a l'article L.622-17 du Code de commerce, je vous mets en demeure de regler "
-                             f"le montant exigible de {total_a_reclamer:,.2f} EUR correspondant aux echeances suivantes :")
-                pdf_r.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
-                pdf_r.ln(5)
-                
-                pdf_r.cell(30, 6, "Echeance", 1)
-                pdf_r.cell(70, 6, "Libelle", 1)
-                pdf_r.cell(30, 6, "Montant", 1)
-                pdf_r.cell(30, 6, "Reste Du", 1, 1)
-                
-                for row in table_rows:
-                    if row["Reste Dû"] > 0 and row["Échéance"] <= date.today():
-                         pdf_r.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
-                         pdf_r.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
-                         pdf_r.cell(30, 6, f"{row['Montant']:.2f}", 1, 0, 'R')
-                         pdf_r.cell(30, 6, f"{row['Reste Dû']:.2f}", 1, 1, 'R')
+                # On recrée user_data ici pour être sûr d'avoir les dernières infos saisies à gauche
+                user_data_relance = {
+                    'nom': id_nom, 'lot': id_lot, 'iban': id_iban, 'bic': id_bic
+                }
+                pdf_r = PDFRelance(user_data_relance)
+                pdf_r.generate_letter(total_a_reclamer, table_rows)
                 
                 st.download_button("📥 TÉLÉCHARGER RELANCE", pdf_r.output(dest='S').encode('latin-1'), "relance_post_rj.pdf", "application/pdf")
