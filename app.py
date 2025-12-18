@@ -10,7 +10,7 @@ import os
 from PIL import Image
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V2.1", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V3", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -26,7 +26,6 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background-color: #ffffff !important; font-weight: bold; border-bottom: 0px solid transparent; box-shadow: none;
     }
-    .big-font { font-size:20px !important; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -141,7 +140,7 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     return echeances
 
 # ==========================================
-# CLASSE SUPER PDF (V2)
+# CLASS PDF 1 : LE DOSSIER COMPLET (Tab 1)
 # ==========================================
 class DossierJuridiquePDF(FPDF):
     def __init__(self, user_info):
@@ -161,7 +160,7 @@ class DossierJuridiquePDF(FPDF):
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
-    def generate_page_1_courrier(self, total_principal, total_interets, total_teom):
+    def generate_page_1_courrier(self, total_principal, total_interets, total_teom, total_indemnite):
         self.add_page()
         self.set_font("Arial", 'B', 11)
         
@@ -192,7 +191,7 @@ class DossierJuridiquePDF(FPDF):
         
         self.multi_cell(0, 6, intro.encode('latin-1', 'replace').decode('latin-1'))
         
-        # AJOUT DE LA MENTION SPÉCIFIQUE (Point 3)
+        # MENTION PREUVE VIREMENTS
         self.set_font("Arial", 'B', 11)
         mention_3 = ("3. En application de l'art. 1353 du Code Civil, je mets le debiteur en demeure de fournir "
                      "les preuves bancaires des paiements qu'il pretend avoir effectues et qui n'apparaissent pas sur mes comptes.")
@@ -202,23 +201,26 @@ class DossierJuridiquePDF(FPDF):
         self.set_font("Arial", 'B', 11)
         self.cell(0, 8, "RECAPITULATIF DE LA CREANCE:", 0, 1)
         
-        # TABLEAU SYNTHESE
+        # TABLEAU SYNTHESE AVEC INDEMNITÉS SÉPARÉES
         self.set_fill_color(240, 240, 240)
         self.cell(100, 8, "POSTE", 1, 0, 'C', fill=True)
         self.cell(40, 8, "MONTANT", 1, 1, 'C', fill=True)
         
         self.set_font("Arial", '', 11)
-        self.cell(100, 8, "Total Loyers Impayes & Principal", 1)
+        self.cell(100, 8, "Total Loyers Impayes (Principal)", 1)
         self.cell(40, 8, f"{total_principal:,.2f} EUR", 1, 1, 'R')
         
         self.cell(100, 8, "Total Interets de Retard", 1)
         self.cell(40, 8, f"{total_interets:,.2f} EUR", 1, 1, 'R')
+
+        self.cell(100, 8, "Indemnites Forfaitaires (Art D.441-5)", 1)
+        self.cell(40, 8, f"{total_indemnite:,.2f} EUR", 1, 1, 'R')
         
         self.cell(100, 8, "Total TEOM (Taxes)", 1)
         self.cell(40, 8, f"{total_teom:,.2f} EUR", 1, 1, 'R')
         
         self.set_font("Arial", 'B', 12)
-        total_global = total_principal + total_interets + total_teom
+        total_global = total_principal + total_interets + total_teom + total_indemnite
         self.cell(100, 10, "TOTAL GENERAL A ADMETTRE", 1, 0, 'R')
         self.cell(40, 10, f"{total_global:,.2f} EUR", 1, 1, 'R')
         
@@ -282,7 +284,6 @@ class DossierJuridiquePDF(FPDF):
         self.set_font("Arial", 'B', 12)
         self.cell(0, 10, "ANNEXE : TABLEAUX DE REFERENCE", 0, 1)
         
-        # TABLEAU INDICES
         self.set_font("Arial", 'B', 10)
         self.cell(40, 8, "Indices ILC", 0, 1)
         self.set_font("Arial", '', 9)
@@ -291,7 +292,6 @@ class DossierJuridiquePDF(FPDF):
             self.cell(30, 6, str(k), 1); self.cell(30, 6, str(v), 1, 1)
             
         self.ln(5)
-        # TABLEAU TAUX
         self.set_font("Arial", 'B', 10)
         self.cell(40, 8, "Taux Legal (BCE+10)", 0, 1)
         self.set_font("Arial", '', 9)
@@ -332,6 +332,23 @@ class DossierJuridiquePDF(FPDF):
                 self.cell(0, 10, f"Erreur affichage image : {str(e)}", 0, 1)
 
 # ==========================================
+# CLASS PDF 2 : LA RELANCE (Tab 2)
+# ==========================================
+class PDFRelance(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 14)
+        txt = 'MISE EN DEMEURE - LOYERS POSTERIEURS'
+        self.cell(0, 10, txt.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
+        self.set_font('Arial', 'I', 9)
+        txt2 = '(Article L. 622-17 du Code de commerce)'
+        self.cell(0, 10, txt2.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
+        self.ln(5)
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+# ==========================================
 # INTERFACE STREAMLIT
 # ==========================================
 
@@ -365,7 +382,7 @@ with st.sidebar:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V2.1")
+st.title("🏛️ Gestionnaire Créance Albion V3")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -427,7 +444,6 @@ with tab_teom:
 with tab1:
     st.info("### 🟦 CALCUL DE LA CRÉANCE (Arrêt au 26/06/2025)")
     
-    # --- RESTAURATION TABLEAUX DE REF ---
     with st.expander("📊 TABLEAUX DE RÉFÉRENCE (Indices & Taux)", expanded=False):
         c_ref1, c_ref2 = st.columns(2)
         with c_ref1:
@@ -520,9 +536,10 @@ with tab1:
             else:
                 user_data = {'nom': id_nom, 'lot': id_lot, 'tel': id_tel, 'email': id_email}
                 pdf = DossierJuridiquePDF(user_data)
-                pdf.generate_page_1_courrier(princ_net + indemnite, int_net, total_teom)
+                # Correction: On passe princ_net (sans indemnite) car indemnite est mntnt un argument séparé
+                pdf.generate_page_1_courrier(princ_net, int_net, total_teom, indemnite)
                 pdf.generate_page_2_details(data_detail, loyer_ht, total_final)
-                pdf.generate_page_3_notice() # Inclut maintenant les tableaux
+                pdf.generate_page_3_notice() 
                 pdf.generate_page_4_teom(st.session_state.teom_list, teom_imgs if teom_imgs else [])
                 
                 st.download_button(
@@ -533,8 +550,16 @@ with tab1:
                 )
 
         if data_detail:
+            # Correction: Fonte des données pour avoir 2 lignes (Principal ET Intérêts)
             df_g = pd.DataFrame(data_detail)
-            chart = alt.Chart(df_g).mark_line().encode(x='Date', y='R_Princ')
+            df_melt = df_g.melt('Date', value_vars=['R_Princ', 'R_Int'], var_name='Type', value_name='Montant')
+            
+            chart = alt.Chart(df_melt).mark_line().encode(
+                x='Date', 
+                y='Montant',
+                color=alt.Color('Type', scale=alt.Scale(domain=['R_Princ', 'R_Int'], range=['#1f77b4', '#d62728']), legend=alt.Legend(title="Type de dette")),
+                tooltip=['Date', 'Type', 'Montant']
+            )
             st.altair_chart(chart, use_container_width=True)
 
 # ==========================================
@@ -564,9 +589,65 @@ with tab2:
             paye = min(montant_du, solde_disponible)
             solde_disponible -= paye
             reste = montant_du - paye
+            
+            status = ""
+            if reste == 0: status = "🟢 PAYÉ"
+            elif paye > 0: status = "🟠 PARTIEL"
+            elif ech["date"] <= date.today(): status = "🔴 IMPAYÉ"
+            else: status = "⚪ À ÉCHOIR"
+            
             if ech["date"] <= date.today():
                 total_a_reclamer += reste
-            table_rows.append({"Échéance": ech["date"], "Libellé": ech["label"], "Montant": montant_du, "Payé": paye, "Reste Dû": reste})
             
-        st.dataframe(pd.DataFrame(table_rows).style.format({"Montant": "{:.2f} €", "Payé": "{:.2f} €", "Reste Dû": "{:.2f} €"}))
+            table_rows.append({
+                "Échéance": ech["date"], 
+                "Libellé": ech["label"], 
+                "Montant": montant_du, 
+                "Payé": paye, 
+                "Reste Dû": reste,
+                "Statut": status
+            })
+            
+        df_post = pd.DataFrame(table_rows)
+        
+        # Fonction de style couleur (Rétablie)
+        def highlight_status(val):
+            if "PAYÉ" in val: return 'background-color: #d4edda; color: #155724'
+            elif "PARTIEL" in val: return 'background-color: #fff3cd; color: #856404'
+            elif "IMPAYÉ" in val: return 'background-color: #f8d7da; color: #721c24'
+            return ''
+
+        st.dataframe(df_post.style.format({"Montant": "{:.2f} €", "Payé": "{:.2f} €", "Reste Dû": "{:.2f} €"}).map(highlight_status, subset=["Statut"]))
+        
         st.metric("Reste à payer (Exigible)", f"{total_a_reclamer:,.2f} €")
+        
+        # Bouton PDF RELANCE (Rétabli)
+        if total_a_reclamer > 0:
+            if st.button("📩 GÉNÉRER MISE EN DEMEURE (PDF)"):
+                pdf_r = PDFRelance()
+                pdf_r.add_page()
+                pdf_r.set_font("Arial", '', 10)
+                pdf_r.cell(0, 5, f"Date : {date.today().strftime('%d/%m/%Y')}", 0, 1, 'R')
+                pdf_r.ln(10)
+                pdf_r.set_font("Arial", 'B', 10)
+                pdf_r.cell(0, 5, "Objet : Mise en demeure de payer les loyers posterieurs (Art L.622-17)", 0, 1)
+                pdf_r.ln(5)
+                pdf_r.set_font("Arial", '', 10)
+                txt_intro = ("Maitre,\n\nConformement a l'article L.622-17 du Code de commerce, je vous mets en demeure de regler "
+                             f"le montant exigible de {total_a_reclamer:,.2f} EUR correspondant aux echeances suivantes :")
+                pdf_r.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
+                pdf_r.ln(5)
+                
+                pdf_r.cell(30, 6, "Echeance", 1)
+                pdf_r.cell(70, 6, "Libelle", 1)
+                pdf_r.cell(30, 6, "Montant", 1)
+                pdf_r.cell(30, 6, "Reste Du", 1, 1)
+                
+                for row in table_rows:
+                    if row["Reste Dû"] > 0 and row["Échéance"] <= date.today():
+                         pdf_r.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
+                         pdf_r.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
+                         pdf_r.cell(30, 6, f"{row['Montant']:.2f}", 1, 0, 'R')
+                         pdf_r.cell(30, 6, f"{row['Reste Dû']:.2f}", 1, 1, 'R')
+                
+                st.download_button("📥 TÉLÉCHARGER RELANCE", pdf_r.output(dest='S').encode('latin-1'), "relance_post_rj.pdf", "application/pdf")
