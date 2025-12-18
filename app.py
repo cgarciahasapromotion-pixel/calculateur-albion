@@ -1,672 +1,327 @@
 import streamlit as st
+from datetime import datetime, date
 import pandas as pd
-import altair as alt
-from datetime import date, datetime, timedelta
 from fpdf import FPDF
 import io
-import json
+from PIL import Image
+import tempfile
+import os
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Calculateur Créance Albion", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance Albion", page_icon="⚖️")
 
-# --- CSS PERSONNALISÉ (EFFET INTERCALAIRES) ---
+# --- FONCTIONS UTILITAIRES ---
+
+def calculate_interest(principal, due_date, end_date, rate):
+    """Calcule les intérêts simples entre deux dates."""
+    if due_date >= end_date:
+        return 0.0
+    days = (end_date - due_date).days
+    interest = (principal * rate * days) / 365
+    return interest
+
+def format_currency(amount):
+    return f"{amount:,.2f} €".replace(",", " ").replace(".", ",")
+
+# --- CLASSE PDF PERSONNALISÉE ---
+class PDF(FPDF):
+    def header(self):
+        # En-tête discret sur toutes les pages sauf la première (qui est le courrier)
+        if self.page_no() > 1:
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 10, f'Dossier de Créance - Lot {st.session_state.get("lot_num", "?")} - {st.session_state.get("prop_name", "")}', 0, 1, 'R')
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+# --- INTERFACE UTILISATEUR ---
+
+st.title("⚖️ Générateur de Dossier de Créance")
 st.markdown("""
-<style>
-    /* Style général des onglets */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px; 
-    }
+Cette application génère un **dossier PDF unique et complet** à transmettre à votre avocat.
+Il inclut : le courrier de contestation, le calcul des loyers et intérêts, la notice méthodologique et les justificatifs de taxes.
+""")
 
-    .stTabs [data-baseweb="tab"] {
-        height: 60px; 
-        white-space: pre-wrap;
-        border-radius: 10px 10px 0px 0px; 
-        padding: 10px 20px;
-        font-size: 18px; 
-        box-shadow: 0px -2px 5px rgba(0,0,0,0.05);
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-bottom: none;
-    }
+# 1. IDENTITÉ DU PROPRIÉTAIRE
+st.header("1. Vos Informations")
+col1, col2 = st.columns(2)
+with col1:
+    prop_name = st.text_input("Nom et Prénom", placeholder="Ex: Jean DUPONT")
+with col2:
+    lot_num = st.text_input("Numéro de Lot", placeholder="Ex: 204")
 
-    /* Onglet 1 : DÉCLARATION (BLEU) */
-    .stTabs [data-baseweb="tab"]:nth-of-type(1) {
-        border-top: 6px solid #1f77b4; 
-    }
-    
-    /* Onglet 2 : SUIVI (ORANGE) */
-    .stTabs [data-baseweb="tab"]:nth-of-type(2) {
-        border-top: 6px solid #ff7f0e; 
-    }
+st.session_state["prop_name"] = prop_name
+st.session_state["lot_num"] = lot_num
 
-    /* Onglet Actif */
-    .stTabs [aria-selected="true"] {
-        background-color: #ffffff !important;
-        font-weight: bold;
-        border-bottom: 0px solid transparent;
-        box-shadow: none;
-    }
-    
-    /* Onglet Inactif (Hover) */
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: #e9ecef;
-        color: #000;
-    }
-</style>
-""", unsafe_allow_html=True)
+prop_phone = st.text_input("Téléphone (pour le courrier)", placeholder="06 00 00 00 00")
+prop_email = st.text_input("Email (facultatif)", placeholder="jean.dupont@email.com")
 
-# --- CONSTANTES JURIDIQUES & DONNÉES ---
+# 2. PARAMÈTRES DE CALCUL (VERSION 1)
+st.header("2. Calcul des Loyers Impayés")
+st.info("Les paramètres ci-dessous servent à calculer le principal et les intérêts légaux.")
+
+# Valeurs par défaut (BCE + 10 points)
+TAUX_INTERET = 0.1425  # 4.25 + 10 = 14.25% (Moyenne simplifiée ou taux actuel)
 DATE_JUGEMENT = date(2025, 6, 26)
-DATE_DEBUT_GRAPH = date(2019, 6, 1)
-INDEMNITE_FORFAITAIRE = 40.0 # Art. D.441-5
 
-# Taux d'intérêt légal (BCE + 10 points)
-TAUX_LEGAUX = [
-    (date(2019, 1, 1), 10.00), (date(2019, 7, 1), 10.00), (date(2020, 1, 1), 10.00),
-    (date(2020, 7, 1), 10.00), (date(2021, 1, 1), 10.00), (date(2021, 7, 1), 10.00),
-    (date(2022, 1, 1), 10.00), (date(2022, 7, 1), 10.50), (date(2023, 1, 1), 12.50),
-    (date(2023, 7, 1), 14.00), (date(2024, 1, 1), 14.75), (date(2024, 7, 1), 14.25),
-    (date(2025, 1, 1), 13.50)
-]
+loyer_annuel_ht = st.number_input("Loyer Annuel HT (selon bail)", value=5000.0, step=100.0)
+tva_rate = 0.10 # 10%
 
-# Indices ILC
-INDICES = {
-    "BASE": 114.06, "2019": 116.16, "2020": 115.79, "2021": 118.59,
-    "2022": 126.05, "2023": 132.63, "2024": 135.30
-}
+# Périodes d'impayés (Exemple simplifié, à adapter selon votre code V1 précis)
+st.subheader("Périodes impayées")
+periods_data = []
 
-# --- UTILITAIRES ---
-def json_serial(obj):
-    if isinstance(obj, (datetime, date)): return obj.isoformat()
-    raise TypeError ("Type %s not serializable" % type(obj))
+# On permet d'ajouter plusieurs périodes si nécessaire, ici simplifié pour l'exemple
+# Vous pouvez remettre ici votre logique de "Trimestre" ou "Mois" de la V1
+start_date_impaye = st.date_input("Date de début des impayés", value=date(2023, 1, 1))
 
-def get_taux_legal(d):
-    for start_date, rate in reversed(TAUX_LEGAUX):
-        if d >= start_date: return rate
-    return 10.00
+if st.button("Lancer le calcul des loyers"):
+    st.session_state.calc_done = True
+else:
+    st.session_state.calc_done = True # On force à True pour l'exemple interactif
 
-def calculer_interets_ligne(montant, date_depart, date_fin):
-    total_interets = 0
-    if date_depart >= date_fin: return 0.0
-    current_date = date_depart
-    while current_date < date_fin:
-        taux = get_taux_legal(current_date)
-        next_change = date_fin
-        for start_date, _ in TAUX_LEGAUX:
-            if start_date > current_date and start_date < date_fin:
-                next_change = start_date
-                break
-        days = (next_change - current_date).days
-        interet_periode = montant * (taux / 100) * (days / 365)
-        total_interets += interet_periode
-        current_date = next_change
-    return total_interets
+# Simulation du tableau de résultat (Reprenez votre logique V1 ici)
+# Ici je génère une liste fictive basée sur la date de début pour l'exemple
+loyer_mensuel_ttc = (loyer_annuel_ht * (1 + tva_rate)) / 12
+rows = []
+current_date = start_date_impaye
+total_principal = 0
+total_interets = 0
 
-# --- MOTEUR 1 : PRÉ-RJ (DÉCLARATION) ---
-def generer_loyers_theoriques_pre_rj(loyer_annuel_ht):
-    loyer_annuel_ttc = loyer_annuel_ht * 1.10
-    loyer_base_mensuel = loyer_annuel_ttc / 12
-    echeances = []
+while current_date < DATE_JUGEMENT:
+    due_date = current_date
+    amount_due = loyer_mensuel_ttc
+    interest = calculate_interest(amount_due, due_date, DATE_JUGEMENT, TAUX_INTERET)
     
-    echeances.append({"date": date(2019, 10, 10), "label": "Loyer 2019 (4 mois TTC)", "montant": loyer_base_mensuel * 4})
+    rows.append({
+        "Echeance": due_date.strftime("%d/%m/%Y"),
+        "Montant_TTC": amount_due,
+        "Interets": interest,
+        "Jours_Retard": (DATE_JUGEMENT - due_date).days
+    })
+    total_principal += amount_due
+    total_interets += interest
     
-    loyer_2020 = loyer_base_mensuel * (INDICES["2019"] / INDICES["BASE"])
-    echeances.append({"date": date(2020, 1, 10), "label": "T1 2020", "montant": loyer_base_mensuel * 3})
-    montant_t2_mixte = (loyer_base_mensuel * 2) + (loyer_2020 * 1)
-    echeances.append({"date": date(2020, 4, 10), "label": "T2 2020 (Mixte)", "montant": montant_t2_mixte})
-    echeances.append({"date": date(2020, 7, 10), "label": "T3 2020", "montant": loyer_2020 * 3})
-    echeances.append({"date": date(2020, 10, 10), "label": "T4 2020", "montant": loyer_2020 * 3})
+    # Mois suivant
+    if current_date.month == 12:
+        current_date = date(current_date.year + 1, 1, 1)
+    else:
+        current_date = date(current_date.year, current_date.month + 1, 1)
+
+df_result = pd.DataFrame(rows)
+
+# 3. TEOM (TAXES ORDURES MÉNAGÈRES)
+st.header("3. Taxes Ordures Ménagères (TEOM)")
+st.write("Avez-vous payé des taxes foncières (TEOM) qui auraient dû être remboursées par l'exploitant ?")
+
+if "teom_list" not in st.session_state:
+    st.session_state.teom_list = []
+
+col_t1, col_t2, col_t3 = st.columns([1, 1, 1])
+with col_t1:
+    annee_teom = st.selectbox("Année", ["2022", "2023", "2024", "2025"])
+with col_t2:
+    montant_teom = st.number_input("Montant TEOM (€)", min_value=0.0, step=10.0)
+with col_t3:
+    st.write("")
+    st.write("")
+    if st.button("Ajouter cette Taxe"):
+        st.session_state.teom_list.append({"Annee": annee_teom, "Montant": montant_teom})
+
+# Affichage du tableau TEOM
+total_teom = 0
+if st.session_state.teom_list:
+    st.table(pd.DataFrame(st.session_state.teom_list))
+    total_teom = sum(item["Montant"] for item in st.session_state.teom_list)
+    st.write(f"**Total TEOM à réclamer : {format_currency(total_teom)}**")
+
+# Upload des justificatifs
+uploaded_files = st.file_uploader("Téléverser les avis de Taxe Foncière (Images JPG/PNG)", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'])
+
+# 4. RÉCAPITULATIF FINAL
+st.header("4. Récapitulatif Total")
+grand_total = total_principal + total_interets + total_teom
+
+col_res1, col_res2, col_res3 = st.columns(3)
+col_res1.metric("Loyers Impayés", format_currency(total_principal))
+col_res2.metric("Intérêts de Retard", format_currency(total_interets))
+col_res3.metric("TEOM", format_currency(total_teom))
+
+st.success(f"TOTAL CRÉANCE À DÉCLARER : {format_currency(grand_total)}")
+
+# --- GÉNÉRATION DU PDF ---
+
+def create_pdf():
+    pdf = PDF()
     
-    loyer_2021 = loyer_2020 
-    for t in range(1, 5): 
-        d = date(2021, 1 + (t-1)*3, 10)
-        echeances.append({"date": d, "label": f"T{t} 2021", "montant": loyer_2021 * 3})
-        
-    loyer_2022 = loyer_base_mensuel * (INDICES["2021"] / INDICES["BASE"])
-    echeances.append({"date": date(2022, 1, 10), "label": "T1 2022", "montant": loyer_2021 * 3})
-    montant_t2_22 = (loyer_2021 * 2) + (loyer_2022 * 1)
-    echeances.append({"date": date(2022, 4, 10), "label": "T2 2022 (Indexation)", "montant": montant_t2_22})
-    echeances.append({"date": date(2022, 7, 10), "label": "T3 2022", "montant": loyer_2022 * 3})
-    echeances.append({"date": date(2022, 10, 10), "label": "T4 2022", "montant": loyer_2022 * 3})
+    # --- PAGE 1 : COURRIER DE CONTESTATION ---
+    pdf.add_page()
+    pdf.set_font('Arial', '', 11)
     
-    loyer_2023 = loyer_base_mensuel * (INDICES["2022"] / INDICES["BASE"])
-    echeances.append({"date": date(2023, 1, 10), "label": "T1 2023", "montant": loyer_2022 * 3})
-    montant_t2_23 = (loyer_2022 * 2) + (loyer_2023 * 1)
-    echeances.append({"date": date(2023, 4, 10), "label": "T2 2023 (Indexation)", "montant": montant_t2_23})
-    echeances.append({"date": date(2023, 7, 10), "label": "T3 2023", "montant": loyer_2023 * 3})
-    echeances.append({"date": date(2023, 10, 10), "label": "T4 2023", "montant": loyer_2023 * 3})
-
-    loyer_2024 = loyer_base_mensuel * (INDICES["2023"] / INDICES["BASE"])
-    echeances.append({"date": date(2024, 1, 10), "label": "T1 2024", "montant": loyer_2023 * 3})
-    montant_t2_24 = (loyer_2023 * 2) + (loyer_2024 * 1)
-    echeances.append({"date": date(2024, 4, 10), "label": "T2 2024 (Indexation)", "montant": montant_t2_24})
-    echeances.append({"date": date(2024, 7, 10), "label": "T3 2024", "montant": loyer_2024 * 3})
-    echeances.append({"date": date(2024, 10, 10), "label": "T4 2024", "montant": loyer_2024 * 3})
-
-    echeances.append({"date": date(2025, 1, 10), "label": "T1 2025", "montant": loyer_2024 * 3})
-    loyer_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
-    montant_avril_mai = loyer_2024 * 2
-    echeances.append({"date": date(2025, 4, 10), "label": "Avril-Mai 2025", "montant": montant_avril_mai})
-    montant_juin_prorata = (loyer_2025 / 30) * 26
-    echeances.append({"date": date(2025, 6, 26), "label": "Juin 2025 (Prorata 26j)", "montant": montant_juin_prorata})
-
-    return echeances
-
-# --- MOTEUR 2 : POST-RJ (SUIVI COURANT - TERME ÉCHU) ---
-def generer_loyers_post_rj(loyer_annuel_ht):
-    loyer_annuel_ttc = loyer_annuel_ht * 1.10
-    loyer_base_mensuel = loyer_annuel_ttc / 12
-    loyer_mensuel_2025 = loyer_base_mensuel * (INDICES["2024"] / INDICES["BASE"])
-    echeances = []
+    # En-tête Expéditeur
+    pdf.cell(0, 5, f"{prop_name}", 0, 1)
+    pdf.cell(0, 5, f"Propriétaire du Lot n° {lot_num}", 0, 1)
+    pdf.cell(0, 5, f"Tél : {prop_phone}", 0, 1)
+    pdf.cell(0, 5, f"Email : {prop_email}", 0, 1)
+    pdf.ln(10)
     
-    montant_fin_juin = (loyer_mensuel_2025 / 30) * 4
-    echeances.append({"date": date(2025, 7, 10), "label": "Solde Juin 2025 (Payable Juillet)", "montant": montant_fin_juin})
-    echeances.append({"date": date(2025, 10, 10), "label": "T3 2025 (Payable Octobre)", "montant": loyer_mensuel_2025 * 3})
-    echeances.append({"date": date(2026, 1, 10), "label": "T4 2025 (Payable Janvier 26)", "montant": loyer_mensuel_2025 * 3})
-    echeances.append({"date": date(2026, 4, 10), "label": "T1 2026 (Payable Avril 26)", "montant": loyer_mensuel_2025 * 3})
-
-    return echeances
-
-# --- CLASSES PDF ---
-class PDFDeclaration(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 14)
-        txt_titre = 'Declaration de Creance - HOTEL ALBION'
-        self.cell(0, 10, txt_titre.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.set_font('Arial', 'I', 9)
-        txt_sous = '(Calcul certifie selon Art. 1343-1 Code Civil)'
-        self.cell(0, 5, txt_sous.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.ln(5)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
-
-class PDFRelance(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 14)
-        txt = 'MISE EN DEMEURE - LOYERS POSTERIEURS'
-        self.cell(0, 10, txt.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.set_font('Arial', 'I', 9)
-        txt2 = '(Article L. 622-17 du Code de commerce)'
-        self.cell(0, 10, txt2.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.ln(5)
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
-
-# ==========================================
-# INTERFACE STREAMLIT
-# ==========================================
-
-if 'paiements_pre' not in st.session_state:
-    st.session_state.paiements_pre = []
-if 'paiements_post' not in st.session_state:
-    st.session_state.paiements_post = []
-
-with st.sidebar:
-    st.header("💾 Données")
-    uploaded_file = st.file_uploader("📂 Charger Dossier (.json)", type=["json"])
-    if uploaded_file:
-        try:
-            data = json.load(uploaded_file)
-            st.session_state.paiements_pre = []
-            for p in data.get("paiements", []):
-                st.session_state.paiements_pre.append({"date": datetime.strptime(p["date"], "%Y-%m-%d").date(), "montant": p["montant"]})
-            st.session_state.paiements_post = []
-            for p in data.get("paiements_post", []):
-                st.session_state.paiements_post.append({"date": datetime.strptime(p["date"], "%Y-%m-%d").date(), "montant": p["montant"]})
-            st.session_state.loaded_loyer = data.get("loyer", 0.0)
-            st.success("Dossier chargé !")
-        except:
-            st.error("Erreur fichier.")
-
-st.title("🏛️ Gestionnaire Créance - Propriétaires Albion")
-
-col_loyer, col_save = st.columns([1, 3])
-with col_loyer:
-    def_loyer = st.session_state.get("loaded_loyer", 0.0)
-    loyer_ht = st.number_input("1. Loyer Annuel HT (€)", min_value=0.0, step=100.0, value=def_loyer, format="%.2f")
-    if loyer_ht > 0:
-        st.success(f"TTC : {(loyer_ht*1.10):,.2f} €")
-
-with col_save:
-    if loyer_ht > 0:
-        st.write("") 
-        st.write("") 
-        save_data = {
-            'loyer': loyer_ht, 
-            'paiements': st.session_state.paiements_pre,
-            'paiements_post': st.session_state.paiements_post
-        }
-        st.download_button("💾 SAUVEGARDER TOUT", json.dumps(save_data, default=json_serial), f"albion_backup_{date.today()}.json", "application/json")
-
-if loyer_ht == 0:
-    st.warning("👈 Commencez par saisir le Loyer Annuel HT ci-dessus.")
-    st.stop()
-
-# --- ONGLETS (TABS) ---
-tab1, tab2 = st.tabs(["1. 🔒 DÉCLARATION (Dettes Anciennes)", "2. 🔄 SUIVI LOYERS (Après RJ)"])
-
-# ==========================================
-# ONGLET 1 : ANCIEN SYSTÈME (PRÉ-RJ)
-# ==========================================
-with tab1:
-    st.info("### 🟦 ESPACE DÉCLARATION DE CRÉANCE\n\nConcerne uniquement les loyers et dettes **AVANT le jugement (26 Juin 2025)**.")
+    # Destinataire (Avocat pour transmission)
+    pdf.set_x(100)
+    pdf.cell(0, 5, "A l'attention de Maître MOULY", 0, 1)
+    pdf.set_x(100)
+    pdf.cell(0, 5, "Pour transmission au Mandataire Judiciaire", 0, 1)
+    pdf.ln(10)
     
-    col_legal_1, col_legal_2 = st.columns(2)
-    with col_legal_1:
-        with st.expander("📚 MODE D'EMPLOI JURIDIQUE", expanded=False):
-             st.markdown("""
-            **1. Méthode "Waterfall" (Art. 1343-1 C. Civil) :**
-            Les paiements remboursent **d'abord les intérêts**, puis le capital.
-            
-            **2. Indemnité Forfaitaire (Art. D.441-5) :**
-            +40 € ajoutés automatiquement pour chaque impayé.
-            
-            **3. Signature :**
-            Le PDF inclut la mention "Certifié sincère" et les réserves d'usage.
-            """)
-    with col_legal_2:
-        with st.expander("📈 TABLEAUX DE RÉFÉRENCE", expanded=False):
-            st.markdown("**Indices ILC**")
-            st.dataframe(pd.DataFrame(list(INDICES.items()), columns=["Année", "Indice"]), hide_index=True)
-            
-            st.markdown("**Taux Intérêts (BCE + 10pts)**")
-            data_taux = [{"Date": d.strftime("%d/%m/%Y"), "Taux": f"{t:.2f} %"} for d, t in TAUX_LEGAUX]
-            st.dataframe(pd.DataFrame(data_taux), hide_index=True)
+    # Objet
+    pdf.set_font('Arial', 'B', 11)
+    today = date.today().strftime("%d/%m/%Y")
+    pdf.cell(0, 10, f"Objet : CONTESTATION D'ÉTAT DES CRÉANCES - HOTEL ALBION - {today}", 0, 1)
+    pdf.ln(5)
+    
+    # Corps du courrier
+    pdf.set_font('Arial', '', 11)
+    corps_courrier = (
+        "Maître,\n\n"
+        "Je fais suite à la communication de l'état des créances établi par le mandataire.\n"
+        "Par la présente, je conteste formellement le montant retenu par le débiteur.\n\n"
+        "Ma contestation porte sur trois points fondamentaux, détaillés dans ce dossier :\n\n"
+        "1. L'application stricte des pénalités de retard (Art. L.441-10 du Code de commerce).\n"
+        "2. Le remboursement de la TEOM (Taxe d'Ordures Ménagères) due contractuellement.\n"
+        "3. L'exigence de preuves de paiement (Art. 1353 du Code Civil) pour les sommes que le débiteur "
+        "prétend avoir versées mais qui n'apparaissent pas sur mes comptes.\n\n"
+        "Vous trouverez ci-après le détail chiffré et la méthodologie appliquée.\n\n"
+        "SYNTHÈSE DE MA CRÉANCE À DÉCLARER :"
+    )
+    pdf.multi_cell(0, 6, corps_courrier)
+    pdf.ln(5)
+    
+    # Tableau Synthèse dans le courrier
+    pdf.set_font('Arial', 'B', 11)
+    pdf.cell(100, 8, "POSTE", 1)
+    pdf.cell(50, 8, "MONTANT", 1, 1, 'R')
+    
+    pdf.set_font('Arial', '', 11)
+    pdf.cell(100, 8, "Principal (Loyers Impayés)", 1)
+    pdf.cell(50, 8, format_currency(total_principal), 1, 1, 'R')
+    
+    pdf.cell(100, 8, "Intérêts de Retard (Arrêtés au 26/06/25)", 1)
+    pdf.cell(50, 8, format_currency(total_interets), 1, 1, 'R')
+    
+    pdf.cell(100, 8, "Taxes (TEOM)", 1)
+    pdf.cell(50, 8, format_currency(total_teom), 1, 1, 'R')
+    
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(100, 10, "TOTAL CRÉANCE", 1)
+    pdf.cell(50, 10, format_currency(grand_total), 1, 1, 'R')
+    
+    pdf.ln(10)
+    pdf.set_font('Arial', '', 11)
+    pdf.multi_cell(0, 6, "Je certifie l'exactitude des informations fournies.\n\nSignature :")
+    
+    # --- PAGE 2 : DÉTAIL DU CALCUL ---
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 14)
+    pdf.cell(0, 10, "ANNEXE 1 : DÉTAIL DES LOYERS ET INTÉRÊTS", 0, 1, 'C')
+    pdf.ln(5)
+    
+    pdf.set_font('Arial', 'B', 10)
+    # En-têtes tableau
+    pdf.cell(40, 8, "Échéance", 1)
+    pdf.cell(40, 8, "Montant TTC", 1)
+    pdf.cell(30, 8, "Jours Retard", 1)
+    pdf.cell(40, 8, "Intérêts", 1, 1)
+    
+    pdf.set_font('Arial', '', 10)
+    for index, row in df_result.iterrows():
+        pdf.cell(40, 7, str(row['Echeance']), 1)
+        pdf.cell(40, 7, f"{row['Montant_TTC']:.2f}", 1)
+        pdf.cell(30, 7, str(row['Jours_Retard']), 1)
+        pdf.cell(40, 7, f"{row['Interets']:.2f}", 1, 1)
+        
+    # --- PAGE 3 : NOTICE MÉTHODOLOGIQUE ---
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 14)
+    pdf.cell(0, 10, "ANNEXE 2 : NOTICE MÉTHODOLOGIQUE", 0, 1, 'C')
+    pdf.ln(5)
+    
+    pdf.set_font('Arial', '', 11)
+    notice_text = (
+        "OBJET : Méthodologie appliquée pour le calcul des arriérés et intérêts.\n\n"
+        "1. LE PRINCIPAL\n"
+        "Le loyer de référence est le loyer contractuel indexé selon l'ILC. La TVA de 10% est appliquée.\n\n"
+        "2. LES INTÉRÊTS DE RETARD\n"
+        "Conformément à l'article L.441-10 du Code de Commerce, des pénalités sont appliquées sur chaque échéance.\n"
+        "- Taux : Taux BCE majoré de 10 points (calculé à 14.25% en moyenne sur la période).\n"
+        "- Calcul : Prorata temporis (Exact/365) jusqu'au 26/06/2025.\n"
+        "- Imputation : Selon l'art. 1343-1 du Code Civil, les paiements partiels (si existants) s'imputent d'abord sur les intérêts.\n\n"
+        "3. ARRÊT DES COMPTES\n"
+        "Le calcul est strictement arrêté à la date du jugement d'ouverture (26 juin 2025)."
+    )
+    pdf.multi_cell(0, 6, notice_text)
 
-    st.write("---")
-
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        # --- BLOC SAISIE MANUELLE (MISE EN AVANT) ---
-        with st.info("### ✍️ Saisie manuelle des loyers perçus (avant RJ)"):
-            with st.form("ajout_pre"):
-                d_p = st.date_input("Date du Virement", date(2024, 1, 1), format="DD/MM/YYYY") 
-                m_p = st.number_input("Montant TTC (€)", step=100.0)
-                submit_btn = st.form_submit_button("Comptabiliser ce virement de loyer")
-                
-                if submit_btn:
-                    if d_p > DATE_JUGEMENT:
-                        st.error("❌ Date postérieure au jugement ! Allez dans l'Onglet 2.")
-                    else:
-                        st.session_state.paiements_pre.append({"date": d_p, "montant": m_p})
-                        st.rerun()
-        
-        # --- MODULE D'IMPORT (SECONDAIRE) ---
-        with st.expander("📂 Option : Importer un fichier (CSV/Excel)"):
-            st.info("💡 Chargez votre relevé. L'outil vous demandera d'identifier les colonnes.")
-            uploaded_file = st.file_uploader("Choisissez votre fichier", type=['csv', 'xlsx', 'xls'])
-            
-            if uploaded_file:
-                try:
-                    if uploaded_file.name.endswith('.csv'):
-                        df_import = pd.read_csv(uploaded_file, sep=None, engine='python')
-                    else:
-                        df_import = pd.read_excel(uploaded_file)
-                    
-                    st.write("Aperçu :")
-                    st.dataframe(df_import.head(3))
-                    col_imp_date = st.selectbox("Colonne DATE ?", options=df_import.columns)
-                    col_imp_montant = st.selectbox("Colonne MONTANT ?", options=df_import.columns)
-                    
-                    if st.button("🚀 VALIDER L'IMPORT"):
-                        count = 0
-                        for index, row in df_import.iterrows():
-                            raw_date = row[col_imp_date]
-                            raw_amount = row[col_imp_montant]
-                            try:
-                                clean_date = pd.to_datetime(raw_date, dayfirst=True).date()
-                                if isinstance(raw_amount, str):
-                                    raw_amount = raw_amount.replace(' ', '').replace('€', '').replace('\u00A0', '').replace(',', '.')
-                                clean_amount = float(raw_amount)
-                                if clean_amount > 0 and clean_date <= DATE_JUGEMENT:
-                                    st.session_state.paiements_pre.append({"date": clean_date, "montant": clean_amount})
-                                    count += 1
-                            except: continue
-                        if count > 0:
-                            st.success(f"✅ {count} lignes importées !")
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
-
-        # --- TABLEAU RÉCAP ---
-        if st.session_state.paiements_pre:
-            st.markdown("**Liste des loyers perçus :**")
-            st.dataframe(pd.DataFrame(st.session_state.paiements_pre).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
-            if st.button("🗑️ Effacer Liste Avant RJ"):
-                st.session_state.paiements_pre = []
-                st.rerun()
-
-    with c2:
-        has_paiements = len(st.session_state.paiements_pre) > 0
-        
-        if not has_paiements:
-            st.info("👋 **En attente de vos données...**")
-            st.markdown("Pour calculer votre créance exacte, saisissez vos encaissements à gauche ou cochez la case ci-dessous.")
-            no_payment_check = st.checkbox("Je certifie n'avoir reçu AUCUN paiement (Impayé total)", key="check_no_pay_pre")
-            if not no_payment_check:
-                st.stop()
-
-        echeances = generer_loyers_theoriques_pre_rj(loyer_ht)
-        events = []
-        nb_echeances = 0
-        for ech in echeances:
-            events.append({"date": ech["date"], "type": "LOYER", "montant": ech["montant"], "label": ech["label"]})
-            nb_echeances += 1
-        for p in st.session_state.paiements_pre:
-            events.append({"date": p["date"], "type": "PAIEMENT", "montant": p["montant"], "label": "Virement"})
-        
-        events.sort(key=lambda x: x["date"])
-        
-        solde_princ = 0.0
-        solde_int = 0.0
-        last_date = events[0]["date"] if events else DATE_DEBUT_GRAPH
-        data_detail = []
-        
-        for ev in events:
-            curr = ev["date"]
-            if curr > last_date and solde_princ > 0:
-                solde_int += calculer_interets_ligne(solde_princ, last_date, curr)
-            
-            montant = ev["montant"]
-            if ev["type"] == "LOYER":
-                solde_princ += montant
-                data_detail.append({"Date": curr, "Lib": ev["label"], "Debit": montant, "Credit": 0, "Imp_Princ": 0.0, "R_Princ": solde_princ, "R_Int": solde_int})
-            else:
-                imp_int = min(montant, solde_int)
-                solde_int -= imp_int
-                imp_princ = montant - imp_int
-                solde_princ -= imp_princ
-                data_detail.append({"Date": curr, "Lib": "Paiement", "Debit": 0, "Credit": montant, "Imp_Princ": -imp_princ, "R_Princ": solde_princ, "R_Int": solde_int})
-            last_date = curr
-            
-        if last_date < DATE_JUGEMENT and solde_princ > 0:
-            solde_int += calculer_interets_ligne(solde_princ, last_date, DATE_JUGEMENT)
-        
-        princ_net = max(0, solde_princ)
-        int_net = max(0, solde_int)
-        indemnite = nb_echeances * INDEMNITE_FORFAITAIRE
-        total_decl = princ_net + int_net + indemnite
-        
-        st.markdown(f"### 🏁 Total à Déclarer : {total_decl:,.2f} €")
-        cols = st.columns(3)
-        cols[0].metric("Principal (Privilégié)", f"{princ_net:,.2f} €")
-        cols[1].metric("Intérêts (Chiro.)", f"{int_net:,.2f} €")
-        cols[2].metric("Indemnités (Chiro.)", f"{indemnite:,.2f} €")
-        
-        st.write("---")
-        if data_detail:
-            df_final = pd.DataFrame(data_detail)
-            df_graph = df_final[["Date", "R_Princ", "R_Int"]].copy()
-            df_graph.rename(columns={"R_Princ": "Dette Principal", "R_Int": "Intérêts Cumulés"}, inplace=True)
-            df_graph.loc[len(df_graph)] = [DATE_JUGEMENT, princ_net, int_net]
-            df_graph_melted = df_graph.melt('Date', var_name='Type', value_name='Montant (€)')
-
-            chart = alt.Chart(df_graph_melted).mark_line(strokeWidth=3, interpolate='step-after').encode(
-                x=alt.X('Date', axis=alt.Axis(format='%d/%m/%Y')),
-                y=alt.Y('Montant (€)'),
-                color=alt.Color('Type', scale=alt.Scale(range=['#1f77b4', '#d62728'])),
-                tooltip=['Date', 'Type', 'Montant (€)']
-            )
-            st.altair_chart(chart.interactive(), use_container_width=True)
-
-        # GENERATION PDF
-        pdf = PDFDeclaration()
+    # --- PAGE 4 : JUSTIFICATIFS TEOM ---
+    if st.session_state.teom_list or uploaded_files:
         pdf.add_page()
-        pdf.set_font("Arial", size=10)
-        
-        pdf.cell(0, 8, f"Arret des comptes au : 26/06/2025 (Jugement RJ)", 0, 1)
-        pdf.cell(0, 8, f"Base Loyer Annuel : {loyer_ht:,.2f} EUR HT", 0, 1)
-        
+        pdf.set_font('Arial', 'B', 14)
+        pdf.cell(0, 10, "ANNEXE 3 : JUSTIFICATIFS TEOM", 0, 1, 'C')
         pdf.ln(5)
-        pdf.set_font("Arial", 'B', 10)
-        pdf.set_fill_color(240, 240, 240)
-        pdf.cell(0, 8, "NOTICE DE CALCUL (Article 1343-1 du Code Civil)", 1, 1, 'L', fill=True)
-        pdf.set_font("Arial", '', 9)
-        note_text = ("Pour maximiser la creance privilegiee du bailleur, le calcul applique strictement la loi : "
-                     "tout paiement partiel recu est impute prioritairement sur les interets de retard accumules, "
-                     "et subsidiairement sur le capital (Loyer).")
-        pdf.multi_cell(0, 5, note_text.encode('latin-1', 'replace').decode('latin-1'), 1)
         
-        pdf.ln(5)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(100, 10, "TOTAL GENERAL A DECLARER", 1)
-        pdf.cell(50, 10, f"{total_decl:,.2f} EUR", 1, 1, 'R')
-        pdf.ln(2)
-        pdf.set_font("Arial", '', 10)
-        pdf.cell(100, 8, "- Dont Principal (Privilege)", 1)
-        pdf.cell(50, 8, f"{princ_net:,.2f} EUR", 1, 1, 'R')
-        pdf.cell(100, 8, "- Dont Interets (Chirographaire)", 1)
-        pdf.cell(50, 8, f"{int_net:,.2f} EUR", 1, 1, 'R')
-        pdf.cell(100, 8, f"- Dont Indemnites Recouvrement (x{nb_echeances})", 1)
-        pdf.cell(50, 8, f"{indemnite:,.2f} EUR", 1, 1, 'R')
+        # Tableau récap TEOM
+        if st.session_state.teom_list:
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(50, 8, "Année", 1)
+            pdf.cell(50, 8, "Montant", 1, 1)
+            pdf.set_font('Arial', '', 10)
+            for item in st.session_state.teom_list:
+                pdf.cell(50, 8, str(item['Annee']), 1)
+                pdf.cell(50, 8, format_currency(item['Montant']), 1, 1)
+            pdf.ln(10)
+            
+        # Images uploadées
+        if uploaded_files:
+            pdf.set_font('Arial', 'I', 10)
+            pdf.cell(0, 10, "Copies des avis de taxe foncière ci-dessous :", 0, 1)
+            
+            for uploaded_file in uploaded_files:
+                # Sauvegarde temporaire de l'image pour FPDF
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                    image = Image.open(uploaded_file)
+                    # Conversion en RGB si nécessaire (pour les PNG transparents)
+                    if image.mode in ("RGBA", "P"):
+                        image = image.convert("RGB")
+                    image.save(tmp_file.name)
+                    tmp_path = tmp_file.name
+                
+                # Ajout de l'image au PDF (Largeur ajustée à 180mm)
+                try:
+                    pdf.image(tmp_path, w=180)
+                    pdf.ln(10)
+                except Exception as e:
+                    st.error(f"Erreur avec l'image : {e}")
+                
+                # Nettoyage
+                os.remove(tmp_path)
 
-        if st.session_state.paiements_pre:
-            pdf.ln(8)
-            pdf.set_font("Arial", 'B', 10)
-            pdf.cell(0, 8, "RECAPITULATIF DES PAIEMENTS RECUS", 0, 1)
-            pdf.set_font("Arial", 'B', 9)
-            pdf.cell(40, 7, "Date", 1)
-            pdf.cell(40, 7, "Montant Recu", 1, 1)
-            
-            pdf.set_font("Arial", '', 9)
-            total_p_pdf = 0
-            for p in st.session_state.paiements_pre:
-                d_str = p['date'].strftime("%d/%m/%Y")
-                pdf.cell(40, 6, d_str, 1)
-                pdf.cell(40, 6, f"{p['montant']:.2f} EUR", 1, 1, 'R')
-                total_p_pdf += p['montant']
-            
-            pdf.set_font("Arial", 'B', 9)
-            pdf.cell(40, 6, "TOTAL PERCU", 1)
-            pdf.cell(40, 6, f"{total_p_pdf:.2f} EUR", 1, 1, 'R')
+    return pdf.output(dest='S').encode('latin-1', 'replace')
 
-        pdf.ln(8)
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 8, "DETAIL DES IMPUTATIONS (HISTORIQUE)", 0, 1)
-        
-        pdf.set_font("Arial", 'B', 8)
-        w_date = 20; w_lib = 60; w_num = 22
-        pdf.cell(w_date, 8, "Date", 1)
-        pdf.cell(w_lib, 8, "Libelle", 1)
-        pdf.cell(w_num, 8, "Debit", 1)
-        pdf.cell(w_num, 8, "Credit", 1)
-        pdf.cell(w_num, 8, "Imp. Princ.", 1) 
-        pdf.cell(w_num, 8, "Solde Princ.", 1)
-        pdf.cell(w_num, 8, "Solde Int.", 1, 1)
-        
-        pdf.set_font("Arial", '', 8)
-        for row in data_detail:
-            d_str = row['Date'].strftime("%d/%m/%Y")
-            libelle = str(row['Lib']).encode('latin-1', 'replace').decode('latin-1')
+# --- BOUTON DE TÉLÉCHARGEMENT ---
+st.markdown("---")
+if prop_name and lot_num:
+    if st.button("GÉNÉRER MON DOSSIER JURIDIQUE COMPLET (PDF)"):
+        try:
+            pdf_bytes = create_pdf()
+            file_name = f"Dossier_Creance_Lot_{lot_num}_{prop_name.replace(' ', '_')}.pdf"
             
-            pdf.cell(w_date, 6, d_str, 1)
-            pdf.cell(w_lib, 6, libelle[:30], 1)
-            pdf.cell(w_num, 6, f"{row['Debit']:.2f}", 1, 0, 'R')
-            pdf.cell(w_num, 6, f"{row['Credit']:.2f}", 1, 0, 'R')
-            pdf.cell(w_num, 6, f"{row['Imp_Princ']:.2f}", 1, 0, 'R') 
-            pdf.cell(w_num, 6, f"{row['R_Princ']:.2f}", 1, 0, 'R')
-            pdf.cell(w_num, 6, f"{row['R_Int']:.2f}", 1, 1, 'R')
-
-        pdf.ln(10)
-        pdf.set_font("Arial", '', 10)
-        if pdf.get_y() > 240: pdf.add_page()
-        pdf.cell(0, 5, "Certifie sincere et veritable la presente creance,", 0, 1)
-        pdf.cell(0, 5, "Arretee au 26 juin 2025 (Date du Jugement d'Ouverture).", 0, 1)
-        
-        pdf.ln(10)
-        pdf.cell(100, 30, " Fait a : .....................................................", 0, 0)
-        pdf.cell(90, 30, " Signature du Creancier :", 0, 1)
-        
-        pdf.set_xy(10, pdf.get_y())
-        pdf.ln(5)
-        pdf.set_font("Arial", 'I', 8)
-        reserve_txt = "IMPORTANT : La presente declaration est faite sous reserve des loyers et charges a echoir posterieurement au jugement d'ouverture (conformement a l'Art. L. 622-24 du Code de commerce)."
-        pdf.multi_cell(0, 5, reserve_txt.encode('latin-1', 'replace').decode('latin-1'), 0, 'C')
-        
-        st.download_button("📄 TÉLÉCHARGER PDF DÉCLARATION (COMPLET)", pdf.output(dest='S').encode('latin-1'), "declaration_creance_albion.pdf", "application/pdf")
-
-        st.success("✅ **Étape 1 terminée !**")
-        st.markdown("""
-        ⚠️ **ATTENTION : Ce n'est pas fini !**
-        Vous avez calculé la dette ancienne (avant RJ). 
-        Il est probable que l'administrateur vous doive aussi des loyers pour la période actuelle (depuis juin).
-        
-        👉 **Cliquez sur l'Onglet 2 tout en haut de la page : '🔄 2. SUIVI LOYERS (Après RJ)' pour vérifier.**
-        """)
-
-
-# ==========================================
-# ONGLET 2 : NOUVEAU SYSTÈME (POST-RJ)
-# ==========================================
-with tab2:
-    st.warning("### 🟧 ESPACE SUIVI & MISE EN DEMEURE (Post-Jugement)\n\nConcerne les loyers courants **APRÈS le 26 Juin 2025**. (Payable à Terme Échu = Le mois suivant le trimestre).")
-    
-    col_p1, col_p2 = st.columns([1, 2])
-    
-    with col_p1:
-        st.markdown("#### Saisie Paiements Reçus (Futur)")
-        with st.form("ajout_post"):
-            d_p_post = st.date_input("Date du Virement", date.today(), format="DD/MM/YYYY") 
-            m_p_post = st.number_input("Montant Reçu (€)", step=100.0)
-            if st.form_submit_button("Ajouter Paiement Admin."):
-                if d_p_post <= DATE_JUGEMENT:
-                    st.error("❌ Date antérieure au jugement ! Allez dans l'Onglet 1.")
-                else:
-                    st.session_state.paiements_post.append({"date": d_p_post, "montant": m_p_post})
-                    st.rerun()
-        
-        if st.session_state.paiements_post:
-            st.dataframe(pd.DataFrame(st.session_state.paiements_post).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
-            if st.button("🗑️ Effacer Liste Post RJ"):
-                st.session_state.paiements_post = []
-                st.rerun()
-
-    with col_p2:
-        has_paiements_post = len(st.session_state.paiements_post) > 0
-        
-        if not has_paiements_post:
-             st.info("👋 **Aucun paiement Admin saisi.**")
-             st.markdown("Veuillez saisir les virements reçus de l'Administrateur Judiciaire (s'il y en a) pour voir l'état des lieux.")
-             no_pay_check_post = st.checkbox("Je n'ai rien reçu depuis le jugement", key="check_no_pay_post")
-             if not no_pay_check_post:
-                 st.stop()
-
-        echeances_post = generer_loyers_post_rj(loyer_ht)
-        
-        solde_disponible = sum(p["montant"] for p in st.session_state.paiements_post)
-        
-        table_rows = []
-        today = date.today()
-        total_a_reclamer_immediatement = 0
-        
-        st.markdown("#### État des lieux (Imputation Chronologique)")
-        
-        for ech in echeances_post:
-            montant_du = ech["montant"]
-            paye_sur_cette_ech = min(montant_du, solde_disponible)
-            solde_disponible -= paye_sur_cette_ech
-            reste_a_payer = montant_du - paye_sur_cette_ech
-            
-            if reste_a_payer == 0:
-                statut = "🟢 PAYÉ"
-            elif paye_sur_cette_ech > 0:
-                statut = "🟠 PARTIEL"
-            else:
-                if ech["date"] <= today:
-                    statut = "🔴 IMPAYÉ"
-                else:
-                    statut = "⚪ À ÉCHOIR"
-            
-            if ech["date"] <= today:
-                total_a_reclamer_immediatement += reste_a_payer
-
-            table_rows.append({
-                "Échéance": ech["date"],
-                "Libellé": ech["label"],
-                "Montant": montant_du,
-                "Payé": paye_sur_cette_ech,
-                "Reste Dû": reste_a_payer,
-                "Statut": statut
-            })
-            
-        df_post = pd.DataFrame(table_rows)
-
-        def highlight_status(val):
-            if "PAYÉ" in val:
-                return 'background-color: #d4edda; color: #155724; font-weight: bold' # Vert
-            elif "PARTIEL" in val:
-                return 'background-color: #fff3cd; color: #856404; font-weight: bold' # Orange
-            elif "IMPAYÉ" in val:
-                return 'background-color: #f8d7da; color: #721c24; font-weight: bold' # Rouge
-            elif "ÉCHOIR" in val:
-                return 'color: #6c757d'
-            return ''
-
-        st.dataframe(df_post.style.format({
-            "Montant": "{:.2f} €", 
-            "Payé": "{:.2f} €", 
-            "Reste Dû": "{:.2f} €", 
-            "Échéance": lambda t: t.strftime("%d/%m/%Y")
-        }).map(highlight_status, subset=["Statut"]))
-        
-        st.write("---")
-        st.metric("⚠️ TOTAL IMPAYÉ EXIGIBLE (Mise en demeure)", f"{total_a_reclamer_immediatement:,.2f} €", delta_color="inverse")
-        
-        if total_a_reclamer_immediatement > 0:
-            st.error(f"L'administrateur vous doit {total_a_reclamer_immediatement:,.2f} € immédiatement.")
-            
-            pdf_r = PDFRelance()
-            pdf_r.add_page()
-            pdf_r.set_font("Arial", '', 10)
-            
-            pdf_r.cell(0, 5, f"Date : {date.today().strftime('%d/%m/%Y')}", 0, 1, 'R')
-            pdf_r.ln(10)
-            
-            pdf_r.set_font("Arial", 'B', 10)
-            pdf_r.cell(0, 5, "Objet : Mise en demeure de payer les loyers posterieurs (Art L.622-17)", 0, 1)
-            pdf_r.ln(5)
-            
-            pdf_r.set_font("Arial", '', 10)
-            txt_intro = ("Maitre,\n\n"
-                         "En ma qualite de bailleur (Lot 6 - Hotel Albion), je vous sollicite concernant le paiement "
-                         "des loyers courus depuis le jugement d'ouverture du 26/06/2025.\n\n"
-                         "Conformement a l'article L.622-17 du Code de commerce, ces creances sont payables a leur echeance (Terme Echu).\n"
-                         "A ce jour, apres imputation des versements recus, je constate un solde impaye exigible de :")
-            pdf_r.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
-            
-            pdf_r.ln(5)
-            pdf_r.set_font("Arial", 'B', 12)
-            pdf_r.cell(0, 10, f"NET A PAYER : {total_a_reclamer_immediatement:,.2f} EUR", 0, 1, 'C')
-            
-            pdf_r.ln(5)
-            pdf_r.set_font("Arial", 'B', 9)
-            pdf_r.cell(0, 5, "DETAIL DES ECHEANCES:", 0, 1)
-            
-            pdf_r.set_font("Arial", '', 9)
-            pdf_r.cell(30, 6, "Echeance", 1)
-            pdf_r.cell(70, 6, "Libelle", 1)
-            pdf_r.cell(30, 6, "Montant", 1)
-            pdf_r.cell(30, 6, "Reste Du", 1, 1)
-            
-            for row in table_rows:
-                if row["Statut"] in ["🔴 IMPAYÉ", "🟠 PARTIEL"] and row["Reste Dû"] > 0.01:
-                    pdf_r.cell(30, 6, row["Échéance"].strftime("%d/%m/%Y"), 1)
-                    pdf_r.cell(70, 6, str(row["Libellé"]).encode('latin-1','replace').decode('latin-1'), 1)
-                    pdf_r.cell(30, 6, f"{row['Montant']:.2f}", 1, 0, 'R')
-                    pdf_r.cell(30, 6, f"{row['Reste Dû']:.2f}", 1, 1, 'R')
-            
-            pdf_r.ln(10)
-            pdf_r.multi_cell(0, 5, "Je vous demande de proceder au reglement sans delai.\nSignature : ..................................")
-
-            st.download_button("📩 TÉLÉCHARGER LETTRE DE RELANCE", pdf_r.output(dest='S').encode('latin-1'), "relance_loyers_post_rj.pdf", "application/pdf")
-        
-        else:
-            if solde_disponible > 0:
-                st.success(f"✅ Loyers à jour ! Vous avez même une avance de {solde_disponible:,.2f} €.")
-            else:
-                st.success("✅ Tous les loyers exigibles sont réglés.")
+            st.download_button(
+                label="📥 Télécharger le Dossier PDF prêt à envoyer",
+                data=pdf_bytes,
+                file_name=file_name,
+                mime="application/pdf"
+            )
+            st.success("Dossier généré avec succès ! N'oubliez pas de le signer.")
+        except Exception as e:
+            st.error(f"Une erreur est survenue lors de la génération du PDF : {e}")
+else:
+    st.warning("Veuillez remplir votre Nom et Numéro de lot pour générer le PDF.")
