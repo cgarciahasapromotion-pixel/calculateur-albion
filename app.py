@@ -8,9 +8,10 @@ import json
 import tempfile
 import os
 from PIL import Image
+from pypdf import PdfWriter, PdfReader # NOUVELLE LIBRAIRIE REQUISE
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V3", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V3.1", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -201,7 +202,7 @@ class DossierJuridiquePDF(FPDF):
         self.set_font("Arial", 'B', 11)
         self.cell(0, 8, "RECAPITULATIF DE LA CREANCE:", 0, 1)
         
-        # TABLEAU SYNTHESE AVEC INDEMNITÉS SÉPARÉES
+        # TABLEAU SYNTHESE
         self.set_fill_color(240, 240, 240)
         self.cell(100, 8, "POSTE", 1, 0, 'C', fill=True)
         self.cell(40, 8, "MONTANT", 1, 1, 'C', fill=True)
@@ -316,9 +317,10 @@ class DossierJuridiquePDF(FPDF):
             self.ln(10)
         
         self.set_font("Arial", 'I', 10)
-        self.cell(0, 10, "Copies des Avis de Taxe Fonciere ci-apres :", 0, 1)
+        self.cell(0, 10, "Copies des Avis de Taxe Fonciere (Images) :", 0, 1)
         
         for img_file in uploaded_images:
+            if img_file.type == "application/pdf": continue # On ignore les PDF ici, ils sont traités au merge final
             try:
                 self.add_page()
                 img = Image.open(img_file)
@@ -382,7 +384,7 @@ with st.sidebar:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V3")
+st.title("🏛️ Gestionnaire Créance Albion V3.1")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -434,9 +436,10 @@ with tab_teom:
                 
     with c_teom2:
         st.markdown("#### 2. Uploader les Justificatifs")
-        teom_imgs = st.file_uploader("Scans Avis Taxe Foncière (PNG/JPG)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+        # MODIF : Ajout du type PDF
+        teom_imgs = st.file_uploader("Scans Avis Taxe Foncière (PDF/PNG/JPG)", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
         if teom_imgs:
-            st.success(f"{len(teom_imgs)} images prêtes.")
+            st.success(f"{len(teom_imgs)} fichier(s) prêt(s).")
 
 # ==========================================
 # ONGLET 1 : DÉCLARATION
@@ -530,31 +533,49 @@ with tab1:
 
         st.write("---")
         
+        # --- BOUTON PDF AVEC MERGE ---
         if st.button("📄 TÉLÉCHARGER LE DOSSIER JURIDIQUE (PDF)", type="primary", use_container_width=True):
             if not id_nom:
                 st.error("⚠️ Renseignez votre IDENTITÉ à gauche !")
             else:
                 user_data = {'nom': id_nom, 'lot': id_lot, 'tel': id_tel, 'email': id_email}
-                pdf = DossierJuridiquePDF(user_data)
-                # Correction: On passe princ_net (sans indemnite) car indemnite est mntnt un argument séparé
-                pdf.generate_page_1_courrier(princ_net, int_net, total_teom, indemnite)
-                pdf.generate_page_2_details(data_detail, loyer_ht, total_final)
-                pdf.generate_page_3_notice() 
-                pdf.generate_page_4_teom(st.session_state.teom_list, teom_imgs if teom_imgs else [])
+                
+                # 1. Générer le rapport principal (FPDF)
+                pdf_report = DossierJuridiquePDF(user_data)
+                pdf_report.generate_page_1_courrier(princ_net, int_net, total_teom, indemnite)
+                pdf_report.generate_page_2_details(data_detail, loyer_ht, total_final)
+                pdf_report.generate_page_3_notice() 
+                # (Note: generate_page_4 n'ajoute que les images, on gère les PDF après)
+                pdf_report.generate_page_4_teom(st.session_state.teom_list, teom_imgs if teom_imgs else [])
+                
+                # 2. Conversion FPDF -> Bytes
+                report_bytes = pdf_report.output(dest='S').encode('latin-1')
+                
+                # 3. Merging (pypdf) pour ajouter les PDF uploadés
+                merger = PdfWriter()
+                merger.append(io.BytesIO(report_bytes)) # Ajoute le rapport FPDF
+                
+                if teom_imgs:
+                    for f in teom_imgs:
+                        if f.type == "application/pdf":
+                            merger.append(f) # Ajoute les pages du PDF uploadé
+                            
+                # 4. Output final
+                final_buffer = io.BytesIO()
+                merger.write(final_buffer)
                 
                 st.download_button(
-                    label="📥 CLIQUEZ ICI POUR LE PDF",
-                    data=pdf.output(dest='S').encode('latin-1'),
+                    label="📥 CLIQUEZ ICI POUR LE PDF FINAL",
+                    data=final_buffer.getvalue(),
                     file_name=f"Dossier_Albion_{id_nom.replace(' ', '_')}.pdf",
                     mime="application/pdf"
                 )
 
         if data_detail:
-            # Correction: Fonte des données pour avoir 2 lignes (Principal ET Intérêts)
             df_g = pd.DataFrame(data_detail)
             df_melt = df_g.melt('Date', value_vars=['R_Princ', 'R_Int'], var_name='Type', value_name='Montant')
-            
-            chart = alt.Chart(df_melt).mark_line().encode(
+            # MODIF : Courbe en paliers (step-after)
+            chart = alt.Chart(df_melt).mark_line(interpolate='step-after').encode(
                 x='Date', 
                 y='Montant',
                 color=alt.Color('Type', scale=alt.Scale(domain=['R_Princ', 'R_Int'], range=['#1f77b4', '#d62728']), legend=alt.Legend(title="Type de dette")),
@@ -610,7 +631,6 @@ with tab2:
             
         df_post = pd.DataFrame(table_rows)
         
-        # Fonction de style couleur (Rétablie)
         def highlight_status(val):
             if "PAYÉ" in val: return 'background-color: #d4edda; color: #155724'
             elif "PARTIEL" in val: return 'background-color: #fff3cd; color: #856404'
@@ -621,7 +641,6 @@ with tab2:
         
         st.metric("Reste à payer (Exigible)", f"{total_a_reclamer:,.2f} €")
         
-        # Bouton PDF RELANCE (Rétabli)
         if total_a_reclamer > 0:
             if st.button("📩 GÉNÉRER MISE EN DEMEURE (PDF)"):
                 pdf_r = PDFRelance()
