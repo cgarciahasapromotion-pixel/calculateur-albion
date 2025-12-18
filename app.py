@@ -11,7 +11,7 @@ from PIL import Image
 from pypdf import PdfWriter, PdfReader
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V3.2", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V4.0", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -141,7 +141,7 @@ def generer_loyers_post_rj(loyer_annuel_ht):
     return echeances
 
 # ==========================================
-# CLASS PDF 1 : LE DOSSIER COMPLET (Tab 1)
+# CLASS PDF 1 : LE DOSSIER COMPLET
 # ==========================================
 class DossierJuridiquePDF(FPDF):
     def __init__(self, user_info):
@@ -192,10 +192,11 @@ class DossierJuridiquePDF(FPDF):
         
         self.multi_cell(0, 6, intro.encode('latin-1', 'replace').decode('latin-1'))
         
-        # MENTION PREUVE VIREMENTS
+        # --- AMÉLIORATION POINT 2 : TEXTE RENFORCÉ ART 1353 ---
         self.set_font("Arial", 'B', 11)
-        mention_3 = ("3. En application de l'art. 1353 du Code Civil, je mets le debiteur en demeure de fournir "
-                     "les preuves bancaires des paiements qu'il pretend avoir effectues et qui n'apparaissent pas sur mes comptes.")
+        mention_3 = ("3. En application de l'art. 1353 du Code Civil, je mets le debiteur en demeure de produire "
+                     "les releves de compte bancaires certifies attestant du debit des sommes qu'il pretend avoir versees. "
+                     "Une simple ecriture comptable interne ne saurait constituer une preuve de paiement opposable.")
         self.multi_cell(0, 6, mention_3.encode('latin-1', 'replace').decode('latin-1'))
         
         self.ln(10)
@@ -225,20 +226,41 @@ class DossierJuridiquePDF(FPDF):
         self.cell(100, 10, "TOTAL GENERAL A ADMETTRE", 1, 0, 'R')
         self.cell(40, 10, f"{total_global:,.2f} EUR", 1, 1, 'R')
         
-        self.ln(10)
+        # --- AMÉLIORATION POINT 1 : MENTION DATE LIMITE ---
+        self.ln(2)
+        self.set_font("Arial", 'BI', 9)
+        self.set_text_color(200, 0, 0) # Rouge pour l'alerte
+        txt_arret = "Arret des comptes au jour du Jugement d'Ouverture (26/06/2025). Les loyers posterieurs sont dus au comptant."
+        self.cell(0, 6, txt_arret.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
+        self.set_text_color(0, 0, 0) # Reset Noir
+
+        self.ln(5)
         self.set_font("Arial", '', 11)
         self.cell(0, 10, "Dans l'attente de votre retour, je vous prie d'agreer, Maitre, mes salutations distinguees.", 0, 1)
+        
+        # --- AMÉLIORATION POINT 4 : ENCART RIB ---
+        self.ln(5)
+        iban = self.user_info.get('iban', '')
+        bic = self.user_info.get('bic', '')
+        if iban:
+            self.set_fill_color(230, 230, 250)
+            self.set_font("Arial", 'B', 10)
+            self.cell(0, 8, "COORDONNEES BANCAIRES POUR REGLEMENT (RIB):", 1, 1, 'L', fill=True)
+            self.set_font("Courier", '', 10) # Police monospace pour l'IBAN
+            self.cell(0, 6, f"IBAN : {iban}", 'LR', 1)
+            self.cell(0, 6, f"BIC  : {bic}", 'LBR', 1)
+
         self.ln(10)
+        self.set_font("Arial", '', 11)
         self.cell(0, 10, "Signature :", 0, 1, 'R')
 
-    # MODIFICATION ICI : Ajout de l'argument paiements_pre
     def generate_page_2_details(self, data_detail, loyer_ht, total_decl, paiements_pre):
         self.add_page()
         self.set_font("Arial", 'B', 14)
         self.cell(0, 10, "DETAIL DU CALCUL FINANCIER", 0, 1, 'C')
         self.ln(5)
         
-        # --- PARTIE 1 : TABLEAU DES PAIEMENTS REÇUS ---
+        # I. RECAP PAIEMENTS
         self.set_font("Arial", 'B', 11)
         self.set_fill_color(230, 230, 230)
         self.cell(0, 8, "I. RECAPITULATIF DES VIREMENTS PERCUS (A DEDUIRE)", 1, 1, 'L', fill=True)
@@ -265,7 +287,7 @@ class DossierJuridiquePDF(FPDF):
         
         self.ln(8)
 
-        # --- PARTIE 2 : CASCADE ---
+        # II. CASCADE
         self.set_font("Arial", 'B', 11)
         self.cell(0, 8, "II. DETAIL DU CALCUL (CASCADE - Art. 1343-1 CC)", 1, 1, 'L', fill=True)
         self.ln(2)
@@ -348,7 +370,12 @@ class DossierJuridiquePDF(FPDF):
                 self.cell(50, 8, f"{t['montant']:.2f} EUR", 1, 1, 'R')
             self.ln(10)
         
+        # --- AMÉLIORATION POINT 3 : Note de lecture pour les images ---
         self.set_font("Arial", 'I', 10)
+        self.set_text_color(100, 100, 100)
+        self.multi_cell(0, 5, "Note de lecture: Veuillez vous referer a la ligne 'Taxe d'enlevement des ordures menageres' sur les avis ci-joints. Seule cette ligne est reclamee.")
+        self.set_text_color(0, 0, 0)
+        self.ln(5)
         self.cell(0, 10, "Copies des Avis de Taxe Fonciere (Images) :", 0, 1)
         
         for img_file in uploaded_images:
@@ -398,6 +425,10 @@ with st.sidebar:
         id_lot = st.text_input("N° de Lot", placeholder="Ex: A204")
         id_tel = st.text_input("Téléphone")
         id_email = st.text_input("Email")
+        # NOUVEAUX CHAMPS RIB
+        st.markdown("**Coordonnées Bancaires (Optionnel)**")
+        id_iban = st.text_input("IBAN")
+        id_bic = st.text_input("BIC")
     
     st.divider()
     st.header("💾 Données")
@@ -411,12 +442,13 @@ with st.sidebar:
             st.session_state.loaded_loyer = data.get("loyer", 0.0)
             if "identity" in data:
                 id_nom = data["identity"].get("nom", "")
+                # On pourrait charger iban/bic ici si sauvegardés
             st.success("Dossier chargé !")
         except:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V3.2")
+st.title("🏛️ Gestionnaire Créance Albion V4.0")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -468,6 +500,7 @@ with tab_teom:
                 
     with c_teom2:
         st.markdown("#### 2. Uploader les Justificatifs")
+        st.info("💡 Conseil : Surlignez la ligne 'Taxe Ordures Ménagères' sur vos scans avant upload pour faciliter la lecture.")
         teom_imgs = st.file_uploader("Scans Avis Taxe Foncière (PDF/PNG/JPG)", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
         if teom_imgs:
             st.success(f"{len(teom_imgs)} fichier(s) prêt(s).")
@@ -569,15 +602,15 @@ with tab1:
             if not id_nom:
                 st.error("⚠️ Renseignez votre IDENTITÉ à gauche !")
             else:
-                user_data = {'nom': id_nom, 'lot': id_lot, 'tel': id_tel, 'email': id_email}
+                user_data = {
+                    'nom': id_nom, 'lot': id_lot, 'tel': id_tel, 'email': id_email,
+                    'iban': id_iban, 'bic': id_bic
+                }
                 
                 # 1. Générer le rapport principal (FPDF)
                 pdf_report = DossierJuridiquePDF(user_data)
                 pdf_report.generate_page_1_courrier(princ_net, int_net, total_teom, indemnite)
-                
-                # MODIFICATION ICI : On passe la liste des paiements pour l'afficher en page 2
                 pdf_report.generate_page_2_details(data_detail, loyer_ht, total_final, st.session_state.paiements_pre)
-                
                 pdf_report.generate_page_3_notice() 
                 pdf_report.generate_page_4_teom(st.session_state.teom_list, teom_imgs if teom_imgs else [])
                 
