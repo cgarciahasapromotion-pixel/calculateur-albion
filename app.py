@@ -8,10 +8,10 @@ import json
 import tempfile
 import os
 from PIL import Image
-from pypdf import PdfWriter, PdfReader # NOUVELLE LIBRAIRIE REQUISE
+from pypdf import PdfWriter, PdfReader
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V3.1", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V3.2", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -231,16 +231,48 @@ class DossierJuridiquePDF(FPDF):
         self.ln(10)
         self.cell(0, 10, "Signature :", 0, 1, 'R')
 
-    def generate_page_2_details(self, data_detail, loyer_ht, total_decl):
+    # MODIFICATION ICI : Ajout de l'argument paiements_pre
+    def generate_page_2_details(self, data_detail, loyer_ht, total_decl, paiements_pre):
         self.add_page()
         self.set_font("Arial", 'B', 14)
         self.cell(0, 10, "DETAIL DU CALCUL FINANCIER", 0, 1, 'C')
         self.ln(5)
         
+        # --- PARTIE 1 : TABLEAU DES PAIEMENTS REÇUS ---
+        self.set_font("Arial", 'B', 11)
+        self.set_fill_color(230, 230, 230)
+        self.cell(0, 8, "I. RECAPITULATIF DES VIREMENTS PERCUS (A DEDUIRE)", 1, 1, 'L', fill=True)
+        self.ln(2)
+
+        if not paiements_pre:
+             self.set_font("Arial", 'I', 10)
+             self.cell(0, 8, "Aucun paiement enregistre sur la periode.", 0, 1)
+        else:
+            self.set_font("Arial", 'B', 10)
+            self.cell(40, 7, "Date", 1)
+            self.cell(40, 7, "Montant Recu", 1, 1)
+            
+            self.set_font("Arial", '', 10)
+            total_recu = 0
+            for p in paiements_pre:
+                self.cell(40, 7, p['date'].strftime("%d/%m/%Y"), 1)
+                self.cell(40, 7, f"{p['montant']:.2f} EUR", 1, 1, 'R')
+                total_recu += p['montant']
+            
+            self.set_font("Arial", 'B', 10)
+            self.cell(40, 7, "TOTAL PERCU", 1)
+            self.cell(40, 7, f"{total_recu:.2f} EUR", 1, 1, 'R')
+        
+        self.ln(8)
+
+        # --- PARTIE 2 : CASCADE ---
+        self.set_font("Arial", 'B', 11)
+        self.cell(0, 8, "II. DETAIL DU CALCUL (CASCADE - Art. 1343-1 CC)", 1, 1, 'L', fill=True)
+        self.ln(2)
+        
         self.set_font("Arial", '', 10)
         self.cell(0, 6, f"Base Loyer Annuel : {loyer_ht:,.2f} EUR HT", 0, 1)
-        self.cell(0, 6, "Methode : Imputation des paiements sur les interets (Art 1343-1 CC)", 0, 1)
-        self.ln(5)
+        self.ln(2)
         
         self.set_font("Arial", 'B', 7) 
         w_d = 18; w_l = 55; w_n = 20
@@ -320,7 +352,7 @@ class DossierJuridiquePDF(FPDF):
         self.cell(0, 10, "Copies des Avis de Taxe Fonciere (Images) :", 0, 1)
         
         for img_file in uploaded_images:
-            if img_file.type == "application/pdf": continue # On ignore les PDF ici, ils sont traités au merge final
+            if img_file.type == "application/pdf": continue # On ignore les PDF ici
             try:
                 self.add_page()
                 img = Image.open(img_file)
@@ -384,7 +416,7 @@ with st.sidebar:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V3.1")
+st.title("🏛️ Gestionnaire Créance Albion V3.2")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -436,7 +468,6 @@ with tab_teom:
                 
     with c_teom2:
         st.markdown("#### 2. Uploader les Justificatifs")
-        # MODIF : Ajout du type PDF
         teom_imgs = st.file_uploader("Scans Avis Taxe Foncière (PDF/PNG/JPG)", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
         if teom_imgs:
             st.success(f"{len(teom_imgs)} fichier(s) prêt(s).")
@@ -543,9 +574,11 @@ with tab1:
                 # 1. Générer le rapport principal (FPDF)
                 pdf_report = DossierJuridiquePDF(user_data)
                 pdf_report.generate_page_1_courrier(princ_net, int_net, total_teom, indemnite)
-                pdf_report.generate_page_2_details(data_detail, loyer_ht, total_final)
+                
+                # MODIFICATION ICI : On passe la liste des paiements pour l'afficher en page 2
+                pdf_report.generate_page_2_details(data_detail, loyer_ht, total_final, st.session_state.paiements_pre)
+                
                 pdf_report.generate_page_3_notice() 
-                # (Note: generate_page_4 n'ajoute que les images, on gère les PDF après)
                 pdf_report.generate_page_4_teom(st.session_state.teom_list, teom_imgs if teom_imgs else [])
                 
                 # 2. Conversion FPDF -> Bytes
@@ -553,12 +586,12 @@ with tab1:
                 
                 # 3. Merging (pypdf) pour ajouter les PDF uploadés
                 merger = PdfWriter()
-                merger.append(io.BytesIO(report_bytes)) # Ajoute le rapport FPDF
+                merger.append(io.BytesIO(report_bytes)) 
                 
                 if teom_imgs:
                     for f in teom_imgs:
                         if f.type == "application/pdf":
-                            merger.append(f) # Ajoute les pages du PDF uploadé
+                            merger.append(f)
                             
                 # 4. Output final
                 final_buffer = io.BytesIO()
@@ -574,7 +607,6 @@ with tab1:
         if data_detail:
             df_g = pd.DataFrame(data_detail)
             df_melt = df_g.melt('Date', value_vars=['R_Princ', 'R_Int'], var_name='Type', value_name='Montant')
-            # MODIF : Courbe en paliers (step-after)
             chart = alt.Chart(df_melt).mark_line(interpolate='step-after').encode(
                 x='Date', 
                 y='Montant',
