@@ -11,7 +11,7 @@ from PIL import Image
 from pypdf import PdfWriter, PdfReader
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Générateur Dossier Créance V4.2", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Générateur Dossier Créance V4.3", page_icon="⚖️", layout="wide")
 
 # --- CSS PERSONNALISÉ ---
 st.markdown("""
@@ -192,7 +192,6 @@ class DossierJuridiquePDF(FPDF):
         
         self.multi_cell(0, 6, intro.encode('latin-1', 'replace').decode('latin-1'))
         
-        # --- AMÉLIORATION POINT 2 : TEXTE RENFORCÉ ART 1353 ---
         self.set_font("Arial", 'B', 11)
         mention_3 = ("3. En application de l'art. 1353 du Code Civil, je mets le debiteur en demeure de produire "
                      "les releves de compte bancaires certifies attestant du debit des sommes qu'il pretend avoir versees. "
@@ -226,19 +225,17 @@ class DossierJuridiquePDF(FPDF):
         self.cell(100, 10, "TOTAL GENERAL A ADMETTRE", 1, 0, 'R')
         self.cell(40, 10, f"{total_global:,.2f} EUR", 1, 1, 'R')
         
-        # --- AMÉLIORATION POINT 1 : MENTION DATE LIMITE ---
         self.ln(2)
         self.set_font("Arial", 'BI', 9)
-        self.set_text_color(200, 0, 0) # Rouge pour l'alerte
+        self.set_text_color(200, 0, 0)
         txt_arret = "Arret des comptes au jour du Jugement d'Ouverture (26/06/2025). Les loyers posterieurs sont dus au comptant."
         self.cell(0, 6, txt_arret.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-        self.set_text_color(0, 0, 0) # Reset Noir
+        self.set_text_color(0, 0, 0)
 
         self.ln(5)
         self.set_font("Arial", '', 11)
         self.cell(0, 10, "Dans l'attente de votre retour, je vous prie d'agreer, Maitre, mes salutations distinguees.", 0, 1)
         
-        # --- AMÉLIORATION POINT 4 : ENCART RIB ---
         self.ln(5)
         iban = self.user_info.get('iban', '')
         bic = self.user_info.get('bic', '')
@@ -246,7 +243,7 @@ class DossierJuridiquePDF(FPDF):
             self.set_fill_color(230, 230, 250)
             self.set_font("Arial", 'B', 10)
             self.cell(0, 8, "COORDONNEES BANCAIRES POUR REGLEMENT (RIB):", 1, 1, 'L', fill=True)
-            self.set_font("Courier", '', 10) # Police monospace pour l'IBAN
+            self.set_font("Courier", '', 10)
             self.cell(0, 6, f"IBAN : {iban}", 'LR', 1)
             self.cell(0, 6, f"BIC  : {bic}", 'LBR', 1)
 
@@ -260,7 +257,6 @@ class DossierJuridiquePDF(FPDF):
         self.cell(0, 10, "DETAIL DU CALCUL FINANCIER", 0, 1, 'C')
         self.ln(5)
         
-        # I. RECAP PAIEMENTS
         self.set_font("Arial", 'B', 11)
         self.set_fill_color(230, 230, 230)
         self.cell(0, 8, "I. RECAPITULATIF DES VIREMENTS PERCUS (A DEDUIRE)", 1, 1, 'L', fill=True)
@@ -287,7 +283,6 @@ class DossierJuridiquePDF(FPDF):
         
         self.ln(8)
 
-        # II. CASCADE
         self.set_font("Arial", 'B', 11)
         self.cell(0, 8, "II. DETAIL DU CALCUL (CASCADE - Art. 1343-1 CC)", 1, 1, 'L', fill=True)
         self.ln(2)
@@ -436,7 +431,7 @@ class PDFRelance(FPDF):
         self.multi_cell(0, 5, txt_intro.encode('latin-1','replace').decode('latin-1'))
         self.ln(8)
         
-        # --- NOUVEAU : SECTION 1 - HISTORIQUE DES REGLEMENTS RECUS ---
+        # --- SECTION 1 - HISTORIQUE DES REGLEMENTS RECUS ---
         self.set_font("Arial", 'B', 10)
         self.set_fill_color(240, 240, 240)
         self.cell(0, 6, "I. HISTORIQUE DES REGLEMENTS ENREGISTRES (POST-RJ)", 1, 1, 'L', fill=True)
@@ -559,7 +554,7 @@ with st.sidebar:
             st.error("Erreur fichier.")
 
 # --- MAIN PAGE ---
-st.title("🏛️ Gestionnaire Créance Albion V4.2")
+st.title("🏛️ Gestionnaire Créance Albion V4.3")
 
 col_loyer, col_save = st.columns([1, 3])
 with col_loyer:
@@ -634,6 +629,7 @@ with tab1:
 
     c1, c2 = st.columns([1, 2])
     with c1:
+        # AJOUT DE PAIEMENT
         with st.form("ajout_pre"):
             d_p = st.date_input("Date Virement", date(2024, 1, 1), format="DD/MM/YYYY") 
             m_p = st.number_input("Montant TTC (€)", step=100.0)
@@ -644,12 +640,25 @@ with tab1:
                     st.session_state.paiements_pre.append({"date": d_p, "montant": m_p})
                     st.rerun()
         
+        # TABLEAU DE GESTION (SUPPRESSION)
         if st.session_state.paiements_pre:
-            st.markdown("Loyers Perçus :")
-            st.dataframe(pd.DataFrame(st.session_state.paiements_pre))
-            if st.button("Effacer Paiements Pré-RJ"):
-                st.session_state.paiements_pre = []
-                st.rerun()
+            st.markdown("---")
+            st.markdown("**Gérer les virements perçus (Avant RJ)**")
+            
+            # Affichage tableau
+            st.dataframe(pd.DataFrame(st.session_state.paiements_pre).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
+            
+            # Module de suppression sélective
+            with st.expander("🗑️ Supprimer un virement spécifique"):
+                p_options = [f"{i} | {p['date'].strftime('%d/%m/%Y')} | {p['montant']} €" for i, p in enumerate(st.session_state.paiements_pre)]
+                selected_p = st.multiselect("Sélectionnez les lignes à supprimer", p_options)
+                
+                if st.button("Supprimer la sélection (Onglet 1)"):
+                    # On récupère les index des lignes sélectionnées (le premier chiffre avant le |)
+                    indices_to_remove = sorted([int(s.split(" | ")[0]) for s in selected_p], reverse=True)
+                    for idx in indices_to_remove:
+                        st.session_state.paiements_pre.pop(idx)
+                    st.rerun()
 
     with c2:
         has_paiements = len(st.session_state.paiements_pre) > 0
@@ -760,20 +769,39 @@ with tab1:
             st.altair_chart(chart, use_container_width=True)
 
 # ==========================================
-# ONGLET 2 : SUIVI
+# ONGLET 2 : SUIVI (CORRECTIF APPLIQUÉ ICI)
 # ==========================================
 with tab2:
     st.warning("### 🟧 SUIVI LOYERS POST-JUGEMENT")
     col_p1, col_p2 = st.columns([1, 2])
     with col_p1:
+        # FORMULAIRE AJOUT
         with st.form("ajout_post"):
             d_p_post = st.date_input("Date Virement", date.today(), format="DD/MM/YYYY") 
             m_p_post = st.number_input("Montant Reçu (€)", step=100.0)
             if st.form_submit_button("Ajouter Paiement"):
-                st.session_state.paiements_post.append({"date": d_p_post, "montant": m_p_post})
-                st.rerun()
+                # VERROUILLAGE DATE (Correctif 1)
+                if d_p_post <= DATE_JUGEMENT:
+                    st.error(f"❌ Date interdite ! ({d_p_post.strftime('%d/%m/%Y')}) est antérieure au jugement. Utilisez l'Onglet 1.")
+                else:
+                    st.session_state.paiements_post.append({"date": d_p_post, "montant": m_p_post})
+                    st.rerun()
+        
+        # TABLEAU + SUPPRESSION (Correctif 2)
         if st.session_state.paiements_post:
-             st.dataframe(pd.DataFrame(st.session_state.paiements_post))
+            st.markdown("---")
+            st.markdown("**Gérer les virements perçus (Post RJ)**")
+            st.dataframe(pd.DataFrame(st.session_state.paiements_post).style.format({"montant": "{:.2f} €", "date": lambda t: t.strftime("%d/%m/%Y")}))
+            
+            with st.expander("🗑️ Supprimer un virement spécifique"):
+                p_options_post = [f"{i} | {p['date'].strftime('%d/%m/%Y')} | {p['montant']} €" for i, p in enumerate(st.session_state.paiements_post)]
+                selected_p_post = st.multiselect("Sélectionnez les lignes à supprimer", p_options_post)
+                
+                if st.button("Supprimer la sélection (Onglet 2)"):
+                    indices_to_remove = sorted([int(s.split(" | ")[0]) for s in selected_p_post], reverse=True)
+                    for idx in indices_to_remove:
+                        st.session_state.paiements_post.pop(idx)
+                    st.rerun()
 
     with col_p2:
         echeances_post = generer_loyers_post_rj(loyer_ht)
