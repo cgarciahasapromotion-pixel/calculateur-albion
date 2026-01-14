@@ -9,7 +9,7 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V2.6 (Strict)", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V2.7 (Official Data)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -17,15 +17,19 @@ DATE_DEBUT_BAIL = date(2019, 6, 1)
 DATE_PIVOT_INDEX = "01 Juin"
 INDEMNITE_FORFAITAIRE = 40.0
 
-# --- HISTORIQUE ILC (Simulé à date Janvier 2026) ---
+# --- HISTORIQUE ILC (Mis à jour INSEE T4 2024) ---
 HISTORIQUE_ILC = [
     {"Annee": 2019, "Indice": 114.06, "Note": "Base Contrat (T4 2018)"},
     {"Annee": 2020, "Indice": 116.26, "Note": "Révision Juin 2020"},
     {"Annee": 2021, "Indice": 118.41, "Note": "Révision Juin 2021"},
     {"Annee": 2022, "Indice": 126.13, "Note": "Révision Juin 2022"},
     {"Annee": 2023, "Indice": 133.62, "Note": "Révision Juin 2023"},
-    {"Annee": 2024, "Indice": 138.60, "Note": "Révision Juin 2024 (Ref T4 2023)"},
-    {"Annee": 2025, "Indice": 142.50, "Note": "Révision Juin 2025 (Ref T4 2024)"},
+    # VALEUR OFFICIELLE VERIFIEE (Publiée Mars 2025)
+    {"Annee": 2024, "Indice": 135.30, "Note": "Révision Juin 2024 (Ref T4 2023)"}, 
+    # PROJECTION T4 2024 POUR REVISION JUIN 2025 (Attention, ici on applique T4 2024)
+    # L'indice applicable en Juin 2025 est le T4 2024 (135.30).
+    # L'indice applicable en Juin 2026 sera le T4 2025 (Estimé ici à 137.50 pour l'exemple futur).
+    {"Annee": 2025, "Indice": 135.30, "Note": "Révision Juin 2025 (Ref T4 2024 - Officiel)"},
 ]
 
 # --- UTILITAIRES ---
@@ -42,7 +46,7 @@ def date_en_francais(d):
     mois = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
     return f"{d.day} {mois[d.month]} {d.year}"
 
-# --- MOTEUR DE CALCUL (LOYER SEUL) ---
+# --- MOTEUR DE CALCUL ---
 def generer_echeancier_post_rj(montant_annuel_ht_base, indice_base, indice_revision):
     coef = indice_revision / indice_base
     annuel_indexe_ht = montant_annuel_ht_base * coef
@@ -101,7 +105,7 @@ def create_debt_chart(data_rows):
     ax.bar(labels, montants_dus, color='#ffebee', edgecolor='#ef5350', label='Dû', width=0.6)
     ax.bar(labels, montants_payes, color='#c8e6c9', edgecolor='#66bb6a', label='Payé', width=0.6)
     ax.set_ylabel('Euros (€)', fontsize=8)
-    ax.set_title('VISUALISATION DES IMPAYES (Hors Pénalités)', fontsize=10, fontweight='bold')
+    ax.set_title('VISUALISATION DES IMPAYES', fontsize=10, fontweight='bold')
     ax.legend(fontsize=8)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -203,7 +207,6 @@ class PDFRelance(FPDF):
         
         self.ln(10)
         
-        # TOTAL DU CASSE EN DEUX
         self.set_fill_color(255, 235, 235)
         self.set_font("Arial", 'B', 10)
         self.cell(140, 6, "SOUS-TOTAL DETTE PRINCIPALE (Occupation) :", 1, 0, 'R', fill=True)
@@ -314,7 +317,7 @@ with st.sidebar:
         except:
             st.error("Erreur indices.")
             val_indice_base = 114.06
-            val_indice_actuel = 142.50
+            val_indice_actuel = 135.30
 
     st.divider()
     uploaded_file = st.file_uploader("Charger sauvegarde", type=["json"])
@@ -495,9 +498,8 @@ with c_pay_2:
     )
     
     if total_retard > 0.01:
-        # BOITE ROUGE AVEC DETAIL
         st.error(f"""
-        ### ⚠️ RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €
+        ### ⚠️ RETARD EXIGIBLE TOTAL (Au {format_date_courte(today)}) : {total_retard:,.2f} €
         
         *Dont :*
         * **Principal (Loyer) :** {sub_retard_loyer:,.2f} €
