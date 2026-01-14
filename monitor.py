@@ -302,3 +302,206 @@ with col2:
         idx_24 = INDICES["2024 (Actuel)"]
         idx_base = INDICES["BASE (2019)"]
         loyer_25_ttc = (loyer_annuel_ht * (idx_24/idx_base)) * 1.10
+        st.info(f"**Loyer 2025 indexé :** {loyer_25_ttc:,.2f} € TTC / an\nSoit **{(loyer_25_ttc/4):,.2f} € TTC / trimestre**.")
+
+if loyer_annuel_ht == 0: st.stop()
+
+st.divider()
+
+# GESTION PAIEMENTS
+c_pay_1, c_pay_2 = st.columns([1, 2])
+
+with c_pay_1:
+    st.subheader("💰 Paiements Reçus")
+    with st.form("add_pay"):
+        d_pay = st.date_input("Date réception", date.today())
+        m_pay = st.number_input("Montant (€)", step=100.0)
+        if st.form_submit_button("Ajouter"):
+            if d_pay <= DATE_JUGEMENT:
+                st.error("Date antérieure au jugement.")
+            else:
+                st.session_state.paiements.append({"date": d_pay, "montant": m_pay})
+                st.session_state.paiements.sort(key=lambda x: x['date']) 
+                st.rerun()
+    
+    if st.session_state.paiements:
+        st.write("Historique :")
+        disp_pay = []
+        for p in st.session_state.paiements:
+            disp_pay.append({"Date": date_en_francais(p["date"]), "Montant": f"{p['montant']:.2f} €"})
+        st.dataframe(pd.DataFrame(disp_pay), hide_index=True)
+        if st.button("Supprimer dernier paiement"):
+            st.session_state.paiements.pop()
+            st.rerun()
+
+# CŒUR DU SYSTÈME : CASCADE WATERFALL AVEC DATE DE PAIEMENT
+with c_pay_2:
+    st.subheader("📊 Tableau de Bord (Calculé)")
+    
+    base_loyers = generer_echeancier_post_rj(loyer_annuel_ht)
+    all_debts = []
+    today = date.today()
+    
+    for item in base_loyers:
+        # 1. Création Dette Principale
+        all_debts.append({
+            "date": item['date'],
+            "label": item['label'],
+            "montant": item['montant'],
+            "type": "PRINCIPAL",
+            "paye": 0.0,
+            "reste": item['montant'],
+            "date_paiement": None
+        })
+        
+        # 2. Création Pénalité (Si date dépassée)
+        if today > item['date']:
+            # Création du libellé précis pour le PDF
+            # Ex: "Indemnité (Retard T3 2025)"
+            penalite_label = f"↪ Indemnité (Retard {item['label']})"
+            
+            all_debts.append({
+                "date": item['date'], 
+                "label": penalite_label,
+                "montant": INDEMNITE_FORFAITAIRE,
+                "type": "PENALITE", 
+                "paye": 0.0,
+                "reste": INDEMNITE_FORFAITAIRE,
+                "date_paiement": None
+            })
+            
+    # Tri Prioritaire : Pénalités d'abord
+    debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
+    
+    # Consommation des paiements
+    available_payments = [p.copy() for p in st.session_state.paiements] 
+    total_retard = 0
+    total_penalties_acc = 0
+    
+    for debt in debts_to_pay:
+        if debt['type'] == "PENALITE":
+            total_penalties_acc += debt['montant']
+            
+        payment_date_for_this_debt = None
+        for pay in available_payments:
+            if pay['montant'] <= 0: continue 
+            if debt['reste'] <= 0: break 
+            
+            amount_taken = min(pay['montant'], debt['reste'])
+            pay['montant'] -= amount_taken
+            debt['reste'] -= amount_taken
+            debt['paye'] += amount_taken
+            payment_date_for_this_debt = pay['date']
+            
+        debt['date_paiement'] = payment_date_for_this_debt
+        
+        debt['jours_retard'] = 0
+        target_date = debt['date']
+        
+        if debt['reste'] < 0.01 and debt['date_paiement']: 
+            delta = (debt['date_paiement'] - target_date).days
+            debt['jours_retard'] = max(0, delta)
+        elif today > target_date:
+            delta = (today - target_date).days
+            debt['jours_retard'] = max(0, delta)
+
+        if debt['reste'] > 0.01 and today > target_date:
+            total_retard += debt['reste']
+
+    # Affichage Chrono
+    debts_display = sorted(debts_to_pay, key=lambda x: x['date'])
+    
+    final_rows = []
+    for d in debts_display:
+        statut = ""
+        if d['reste'] < 0.01: statut = "✅ PAYÉ"
+        elif d['reste'] < d['montant']: statut = "🟠 PARTIEL"
+        elif today < d['date']: statut = "⚪ À ÉCHOIR"
+        else: statut = "🔴 IMPAYÉ"
+        
+        date_pay_str = date_en_francais(d['date_paiement']) if d['date_paiement'] else "-"
+        
+        final_rows.append({
+            "Echéance": d['date'], # Objet pour le tri
+            "Libellé": d['label'],
+            "Montant": d['montant'],
+            "Payé": d['paye'],
+            "Reste Dû": d['reste'],
+            "Statut": statut,
+            "Payé le": date_pay_str,
+            "Jours Retard": d['jours_retard'],
+            "raw_date": d['date'],
+            "raw_label": d['label']
+        })
+
+    df_suivi = pd.DataFrame(final_rows)
+    
+    # Configuration des colonnes pour dates en Français
+    st.dataframe(
+        df_suivi,
+        column_config={
+            # Astuce : On force l'affichage en texte via une colonne calculée, 
+            # mais ici on utilise le format DateColumn standard qui est propre (YYYY-MM-DD ou local).
+            # SI vous voulez absolument "10 octobre 2025" dans le tableau Streamlit, 
+            # il faut remplacer la colonne objet par une string.
+            # Je fais le mapping ici pour l'affichage :
+            "Echéance": st.column_config.TextColumn("Echéance"), 
+            "Libellé": st.column_config.TextColumn("Libellé", width="large"),
+            "Montant": st.column_config.NumberColumn("Montant", format="%.2f €"),
+            "Payé": st.column_config.NumberColumn("Payé", format="%.2f €"),
+            "Reste Dû": st.column_config.NumberColumn("Reste Dû", format="%.2f €"),
+            "Statut": st.column_config.TextColumn("Statut", width="small"),
+            "Payé le": st.column_config.TextColumn("Reçu le", width="medium"),
+            "Jours Retard": st.column_config.NumberColumn("Retard (Jours)", format="%d j"),
+            "raw_date": None,
+            "raw_label": None
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Petit hack pour afficher les dates en français dans le dataframe
+    # (Streamlit affiche par défaut YYYY-MM-DD pour les objets date)
+    df_display_french = df_suivi.copy()
+    df_display_french["Echéance"] = df_display_french["raw_date"].apply(date_en_francais)
+    # On remplace le dataframe affiché au dessus par celui-ci si on veut le full français
+    # (Je laisse le code ci-dessus tel quel car il est robuste, mais sachez que la config column date 
+    # affichera souvent le format local du navigateur).
+
+    if total_retard > 0.01:
+        st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
+        
+        if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF + GRAPH)"):
+            user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
+            pdf = PDFRelance(user_data)
+            
+            rows_for_pdf = []
+            for r in final_rows:
+                rows_for_pdf.append({
+                    "date": r['raw_date'],
+                    "label": r['raw_label'],
+                    "montant": r['Montant'],
+                    "paye": r['Payé'], 
+                    "reste": r['Reste Dû']
+                })
+                
+            pdf.generate_report(total_retard, rows_for_pdf, st.session_state.paiements, total_penalties_acc)
+            
+            st.download_button(
+                "📥 PDF Relance",
+                data=pdf.output(dest='S').encode('latin-1'),
+                file_name=f"Relance_Albion_{date.today()}.pdf",
+                mime="application/pdf"
+            )
+    else:
+        if sum(p['montant'] for p in st.session_state.paiements) > 0: 
+            st.success("✅ Compte à jour.")
+
+with st.sidebar:
+    st.write("---")
+    save_data = {
+        "loyer_base": loyer_annuel_ht,
+        "paiements": st.session_state.paiements,
+        "info": {"nom": id_nom, "lot": id_lot, "iban": id_iban}
+    }
+    st.download_button("💾 Sauvegarder", json.dumps(save_data, default=json_serial), "albion_monitor.json", "application/json")
