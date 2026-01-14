@@ -6,7 +6,7 @@ import json
 import io
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.2", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.3 (Waterfall)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -43,7 +43,7 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
         "date": date(2025, 7, 10), 
         "label": "Solde Juin 2025 (Prorata)", 
         "montant": montant_juin,
-        "is_rent": True
+        "type": "loyer"
     })
     
     # Échéance 2 : T3 2025
@@ -51,7 +51,7 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
         "date": date(2025, 10, 10), 
         "label": "T3 2025 (Juil-Août-Sept)", 
         "montant": loyer_mensuel_2025_ttc * 3,
-        "is_rent": True
+        "type": "loyer"
     })
     
     # Échéance 3 : T4 2025
@@ -59,7 +59,7 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
         "date": date(2026, 1, 10), 
         "label": "T4 2025 (Oct-Nov-Déc)", 
         "montant": loyer_mensuel_2025_ttc * 3,
-        "is_rent": True
+        "type": "loyer"
     })
     
     # Anticipation 2026
@@ -67,7 +67,7 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
         "date": date(2026, 4, 10), 
         "label": "T1 2026 (Jan-Fév-Mars)", 
         "montant": loyer_mensuel_2025_ttc * 3,
-        "is_rent": True
+        "type": "loyer"
     })
 
     return echeances
@@ -111,16 +111,17 @@ class PDFRelance(FPDF):
         txt = ("Maitre,\n\n"
                "Sauf erreur ou omission de ma part, je constate a ce jour un defaut de paiement des loyers "
                "courants (nes posterieurement au jugement d'ouverture).\n\n"
-               "Conformement a l'article L.622-17 I du Code de commerce, ces creances sont payables a leur echeance.\n"
-               "Le non-paiement de ces sommes (loyers principaux et accessoires) constitue un motif de resiliation "
-               "du bail (Art L.622-14) et demontre l'impossibilite de financer la periode d'observation.")
+               "Conformement a l'article L.622-17 I du Code de commerce, ces creances sont payables a leur echeance.\n\n"
+               "IMPORTANT : En application de l'article 1343-1 du Code Civil, les paiements partiels recus ont ete "
+               "imputes prioritairement sur les interets et penalites de retard, et subsidiairement sur le capital.\n\n"
+               "Le non-paiement de ces sommes constitue un motif de resiliation du bail (Art L.622-14).")
         self.multi_cell(0, 5, txt.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(5)
         
         # Tableau
         self.set_fill_color(255, 200, 200)
         self.set_font("Arial", 'B', 9)
-        self.cell(0, 6, "DETAIL DES IMPAYES (PRINCIPAL + INDEMNITES)", 1, 1, 'L', fill=True)
+        self.cell(0, 6, "DETAIL DES IMPAYES (METHODE WATERFALL ART. 1343-1 CC)", 1, 1, 'L', fill=True)
         self.cell(30, 6, "Exigibilite", 1)
         self.cell(80, 6, "Libelle", 1)
         self.cell(30, 6, "Montant", 1)
@@ -128,9 +129,8 @@ class PDFRelance(FPDF):
         
         self.set_font("Arial", '', 9)
         for row in table_rows:
-            # On affiche tout ce qui a un reste dû (Loyer ou Indemnité)
             if row['reste'] > 0.01:
-                # Police Italique pour les indemnités pour les distinguer
+                # Police Italique pour les indemnités
                 if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
                 else: self.set_font("Arial", '', 9)
                 
@@ -181,7 +181,7 @@ with st.sidebar:
 
 # HEADER
 st.title("📡 Albion Monitor")
-st.markdown("### Suivi des Loyers Postérieurs & Pénalités")
+st.markdown("### Suivi des Loyers Postérieurs (Méthode Waterfall)")
 
 col1, col2 = st.columns([1, 2])
 with col1:
@@ -199,7 +199,7 @@ if loyer_annuel_ht == 0: st.stop()
 
 st.divider()
 
-# GESTION
+# GESTION PAIEMENTS
 c_pay_1, c_pay_2 = st.columns([1, 2])
 
 with c_pay_1:
@@ -224,84 +224,92 @@ with c_pay_1:
             st.session_state.paiements.pop()
             st.rerun()
 
+# CŒUR DU SYSTÈME : CASCADE WATERFALL
 with c_pay_2:
     st.subheader("📊 Tableau de Bord (Cascade)")
     
-    # 1. Génération des dettes théoriques (Loyers)
-    base_obligations = generer_echeancier_post_rj(loyer_annuel_ht)
+    # 1. Préparation des Dettes
+    base_loyers = generer_echeancier_post_rj(loyer_annuel_ht)
+    all_debts = []
     
-    # 2. Construction de la liste finale avec Pénalités
-    final_rows = []
-    total_paye = sum(p['montant'] for p in st.session_state.paiements)
-    solde_dispo = total_paye
-    total_retard = 0
     today = date.today()
     
-    # On boucle sur les loyers
-    for item in base_obligations:
-        # A. Traitement du Loyer Principal
-        montant_du = item['montant']
-        couverture = min(montant_du, solde_dispo)
-        solde_dispo -= couverture
-        reste = montant_du - couverture
-        
-        statut_code = ""
-        is_late = False
-        
-        if reste == 0: statut_code = "PAYÉ"
-        elif reste > 0 and couverture > 0: 
-            statut_code = "RELIQUAT"
-            if item['date'] <= today: is_late = True
-        elif item['date'] <= today:
-            statut_code = "IMPAYÉ"
-            is_late = True
-        else: statut_code = "À ÉCHOIR"
-        
-        if is_late: total_retard += reste
-        
-        final_rows.append({
+    # On éclate les loyers et on crée les pénalités si nécessaire
+    for item in base_loyers:
+        # La dette de loyer existe toujours
+        all_debts.append({
             "date": item['date'],
-            "Date Exigible": date_en_francais(item['date']),
             "label": item['label'],
-            "montant": montant_du,
-            "paye": couverture,
-            "reste": reste,
-            "statut": statut_code,
-            "is_penalty": False
+            "montant": item['montant'],
+            "type": "PRINCIPAL",
+            "paye": 0.0,
+            "reste": item['montant']
         })
         
-        # B. Traitement Automatique de l'Indemnité (PUNISHER)
-        # Si le loyer est en retard aujourd'hui, on ajoute la pénalité
-        if is_late:
-            penalite_montant = INDEMNITE_FORFAITAIRE
-            # On essaie de payer la pénalité avec ce qui reste du solde_dispo (Waterfall)
-            penalite_couverture = min(penalite_montant, solde_dispo)
-            solde_dispo -= penalite_couverture
-            penalite_reste = penalite_montant - penalite_couverture
-            
-            penalite_statut = "DÛ (AUTO)" if penalite_reste > 0 else "PAYÉ"
-            if penalite_reste > 0: total_retard += penalite_reste
-            
-            final_rows.append({
-                "date": item['date'], # Même date que le loyer pour le tri
-                "Date Exigible": "Immédiat",
+        # La pénalité existe si la date est dépassée
+        if item['date'] <= today:
+            all_debts.append({
+                "date": item['date'], # Même date pour le tri, mais priorité différente
                 "label": f"↪ Indemnité Forfaitaire (Retard {item['label']})",
-                "montant": penalite_montant,
-                "paye": penalite_couverture,
-                "reste": penalite_reste,
-                "statut": penalite_statut,
-                "is_penalty": True
+                "montant": INDEMNITE_FORFAITAIRE,
+                "type": "PENALITE", # Prioritaire
+                "paye": 0.0,
+                "reste": INDEMNITE_FORFAITAIRE
             })
+            
+    # 2. Tri Intelligent pour la Cascade
+    # On veut payer d'abord TOUTES les pénalités (anciennes et récentes), PUIS les loyers (anciens puis récents)
+    # Astuce : On trie par Type (Penalité < Principal) puis par Date
+    debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
+    
+    # 3. Application du Paiement (Siphon)
+    solde_dispo = sum(p['montant'] for p in st.session_state.paiements)
+    total_retard = 0
+    
+    for debt in debts_to_pay:
+        # On paie ce qu'on peut
+        paiement_sur_cette_dette = min(debt['montant'], solde_dispo)
+        
+        debt['paye'] = paiement_sur_cette_dette
+        debt['reste'] = debt['montant'] - paiement_sur_cette_dette
+        
+        solde_dispo -= paiement_sur_cette_dette
+        
+        # Calcul du retard exigible (seulement si la dette est échue)
+        if debt['date'] <= today:
+            total_retard += debt['reste']
 
-    # 3. Affichage
+    # 4. Remise en ordre Chronologique pour l'Affichage
+    debts_display = sorted(debts_to_pay, key=lambda x: x['date'])
+    
+    final_rows = []
+    for d in debts_display:
+        statut = ""
+        if d['reste'] == 0: statut = "PAYÉ"
+        elif d['reste'] < d['montant']: statut = "RELIQUAT"
+        elif d['date'] <= today: statut = "IMPAYÉ" # Ou DÛ pour pénalité
+        else: statut = "À ÉCHOIR"
+        
+        final_rows.append({
+            "Date Exigible": date_en_francais(d['date']),
+            "label": d['label'],
+            "montant": d['montant'],
+            "paye": d['paye'],
+            "reste": d['reste'],
+            "statut": statut,
+            "raw_date": d['date'], # Pour le PDF
+            "raw_label": d['label'] # Pour le PDF
+        })
+
+    # 5. Rendu Tableau
     df_suivi = pd.DataFrame(final_rows)
     
     def style_rows(val):
         color = 'black'
         if val == "PAYÉ": color = '#28a745'
-        elif "RELIQUAT" in val: color = '#fd7e14'
-        elif "IMPAYÉ" in val or "DÛ" in val: color = '#dc3545' # Rouge
-        elif val == "À ÉCHOIR": color = '#6c757d'
+        elif val == "RELIQUAT": color = '#fd7e14' # Orange
+        elif "IMPAYÉ" in val: color = '#dc3545'
+        elif "À ÉCHOIR" in val: color = '#6c757d'
         return f'color: {color}; font-weight: bold'
 
     st.dataframe(
@@ -311,7 +319,7 @@ with c_pay_2:
         use_container_width=True
     )
     
-    st.caption("ℹ️ *Les indemnités de 40 € (Art. D.441-5) s'ajoutent automatiquement dès qu'une échéance est dépassée.*")
+    st.caption("ℹ️ *Application stricte Art. 1343-1 CC : Les paiements éteignent d'abord les pénalités.*")
     
     if total_retard > 0.01:
         st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
@@ -319,8 +327,18 @@ with c_pay_2:
         if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF)"):
             user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
             pdf = PDFRelance(user_data)
-            # On passe final_rows pour que le PDF inclue les pénalités
-            pdf.generate_letter(total_retard, final_rows, st.session_state.paiements)
+            
+            # On prépare les données pour le PDF (on a besoin des objets bruts)
+            rows_for_pdf = []
+            for r in final_rows:
+                rows_for_pdf.append({
+                    "date": r['raw_date'],
+                    "label": r['raw_label'],
+                    "montant": r['montant'],
+                    "reste": r['reste']
+                })
+                
+            pdf.generate_letter(total_retard, rows_for_pdf, st.session_state.paiements)
             
             st.download_button(
                 "📥 PDF Relance",
@@ -329,7 +347,8 @@ with c_pay_2:
                 mime="application/pdf"
             )
     else:
-        if total_paye > 0: st.success("✅ Compte à jour.")
+        if sum(p['montant'] for p in st.session_state.paiements) > 0: 
+            st.success("✅ Compte à jour.")
 
 with st.sidebar:
     st.write("---")
