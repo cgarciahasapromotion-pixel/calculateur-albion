@@ -9,7 +9,7 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V2.0 (Final)", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V2.1", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -109,7 +109,7 @@ class PDFRelance(FPDF):
     def __init__(self, user_info):
         super().__init__()
         self.user_info = user_info
-        self.alias_nb_pages() # Permet d'utiliser {nb} pour le nombre total de pages
+        self.alias_nb_pages()
 
     def header(self):
         self.set_font('Arial', 'I', 8)
@@ -120,7 +120,6 @@ class PDFRelance(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
-        # MODIF : Pagination X/Y
         self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
 
     def generate_report(self, total_due, table_rows, history_payments, total_penalties_amount):
@@ -196,11 +195,15 @@ class PDFRelance(FPDF):
             self.cell(150, 6, "CUMUL PENALITES", 1)
             self.cell(40, 6, f"{total_penalties_amount:.2f} EUR", 1, 1, 'R')
 
-        # MODIF : TOTAL PAGE 1
+        # TOTAL PAGE 1
         self.ln(15)
         self.set_fill_color(255, 235, 235) # Fond rouge très pale
         self.set_font("Arial", 'B', 12)
         self.cell(0, 10, f"TOTAL GENERAL EXIGIBLE CE JOUR : {total_due:,.2f} EUR", 1, 1, 'C', fill=True)
+        
+        # MODIF ICI : Mention de suite
+        self.set_font("Arial", 'I', 8)
+        self.cell(0, 6, "(Suivant decompte et Mise en Demeure - Voir Page 2/2)", 0, 1, 'C')
 
         # --- PAGE 2 : COURRIER JURIDIQUE ---
         self.add_page()
@@ -250,6 +253,7 @@ class PDFRelance(FPDF):
                 if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
                 else: self.set_font("Arial", '', 9)
                 
+                # Format JJ/MM/AAAA
                 d_str = row['raw_date'].strftime("%d/%m/%Y")
                 self.cell(30, 6, d_str, 1)
                 self.cell(80, 6, row['label'][:45].encode('latin-1', 'replace').decode('latin-1'), 1)
@@ -257,8 +261,7 @@ class PDFRelance(FPDF):
                 self.cell(30, 6, f"{row['reste']:.2f}", 1, 1, 'R')
         
         self.ln(5)
-        # MODIF : TOTAL PAGE 2 BOLD
-        self.set_font("Arial", 'B', 12)
+        self.set_font("Arial", 'B', 11)
         self.cell(0, 10, f"NET A PAYER : {total_due:,.2f} EUR", 0, 1, 'R')
         
         self.ln(5)
@@ -350,7 +353,7 @@ with c_pay_2:
     today = date.today()
     
     for item in base_loyers:
-        # Dette
+        # Dette Principale
         all_debts.append({
             "date": item['date'],
             "label": item['label'],
@@ -373,7 +376,7 @@ with c_pay_2:
                 "date_paiement": None
             })
             
-    # Tri
+    # Tri Prioritaire : Pénalités d'abord
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
     # Paiement
