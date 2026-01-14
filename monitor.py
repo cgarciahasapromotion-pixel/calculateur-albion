@@ -9,7 +9,7 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V2.1", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V2.2 (Neutre)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -39,14 +39,15 @@ def date_en_francais(d):
     return f"{d.day} {mois[d.month]} {d.year}"
 
 # --- MOTEUR DE CALCUL ---
-def generer_echeancier_post_rj(loyer_annuel_ht_base):
-    loyer_mensuel_2025_ht = (loyer_annuel_ht_base / 12) * (INDICES["2024 (Actuel)"] / INDICES["BASE (2019)"])
-    loyer_mensuel_2025_ttc = loyer_mensuel_2025_ht * 1.10 
+def generer_echeancier_post_rj(montant_annuel_ht_base):
+    # Calcul du Montant Mensuel Actuel (2025)
+    mensuel_2025_ht = (montant_annuel_ht_base / 12) * (INDICES["2024 (Actuel)"] / INDICES["BASE (2019)"])
+    mensuel_2025_ttc = mensuel_2025_ht * 1.10 
     
     echeances = []
     
     # Échéance 1 : Solde Juin
-    montant_juin = (loyer_mensuel_2025_ttc / 30) * 4 
+    montant_juin = (mensuel_2025_ttc / 30) * 4 
     echeances.append({
         "date": date(2025, 7, 10), 
         "label": "Solde Juin 2025 (Prorata)", 
@@ -57,21 +58,21 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
     echeances.append({
         "date": date(2025, 10, 10), 
         "label": "T3 2025 (Juil-Août-Sept)", 
-        "montant": loyer_mensuel_2025_ttc * 3
+        "montant": mensuel_2025_ttc * 3
     })
     
     # Échéance 3 : T4 2025
     echeances.append({
         "date": date(2026, 1, 10), 
         "label": "T4 2025 (Oct-Nov-Déc)", 
-        "montant": loyer_mensuel_2025_ttc * 3
+        "montant": mensuel_2025_ttc * 3
     })
     
     # Anticipation 2026
     echeances.append({
         "date": date(2026, 4, 10), 
         "label": "T1 2026 (Jan-Fév-Mars)", 
-        "montant": loyer_mensuel_2025_ttc * 3
+        "montant": mensuel_2025_ttc * 3
     })
 
     return echeances
@@ -197,15 +198,13 @@ class PDFRelance(FPDF):
 
         # TOTAL PAGE 1
         self.ln(15)
-        self.set_fill_color(255, 235, 235) # Fond rouge très pale
+        self.set_fill_color(255, 235, 235) 
         self.set_font("Arial", 'B', 12)
         self.cell(0, 10, f"TOTAL GENERAL EXIGIBLE CE JOUR : {total_due:,.2f} EUR", 1, 1, 'C', fill=True)
-        
-        # MODIF ICI : Mention de suite
         self.set_font("Arial", 'I', 8)
         self.cell(0, 6, "(Suivant decompte et Mise en Demeure - Voir Page 2/2)", 0, 1, 'C')
 
-        # --- PAGE 2 : COURRIER JURIDIQUE ---
+        # --- PAGE 2 : COURRIER JURIDIQUE (VERSION NEUTRE) ---
         self.add_page()
         
         self.set_font("Arial", 'B', 11)
@@ -222,10 +221,11 @@ class PDFRelance(FPDF):
         self.set_font("Arial", 'B', 14)
         self.cell(0, 10, "MISE EN DEMEURE DE PAYER SOUS HUITAINE", 0, 1, 'C')
         self.set_font("Arial", 'B', 10)
-        self.cell(0, 5, "(Loyers Post-Jugement - Art. L.622-17 Code de commerce)", 0, 1, 'C')
+        self.cell(0, 5, "(Sommes Post-Jugement - Art. L.622-17 Code de commerce)", 0, 1, 'C')
         self.ln(10)
         
         self.set_font("Arial", '', 10)
+        # TEXTE "SUBTERFUGE" - NI LOYER NI INDEMNITÉ EXPLICITE
         txt = ("Maitre,\n\n"
                "Veuillez trouver en Page 1 l'audit complet de la situation comptable de mon lot.\n"
                "Je constate a ce jour un solde debiteur exigible.\n\n"
@@ -253,7 +253,6 @@ class PDFRelance(FPDF):
                 if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
                 else: self.set_font("Arial", '', 9)
                 
-                # Format JJ/MM/AAAA
                 d_str = row['raw_date'].strftime("%d/%m/%Y")
                 self.cell(30, 6, d_str, 1)
                 self.cell(80, 6, row['label'][:45].encode('latin-1', 'replace').decode('latin-1'), 1)
@@ -294,25 +293,29 @@ with st.sidebar:
     if uploaded_file:
         data = json.load(uploaded_file)
         st.session_state.paiements = [{"date": datetime.strptime(p["date"], "%Y-%m-%d").date(), "montant": p["montant"]} for p in data.get("paiements", [])]
+        # RETRO-COMPATIBILITE JSON (loyer_base = montant_reference)
         st.session_state.loyer_base = data.get("loyer_base", 0.0)
         id_nom = data.get("info", {}).get("nom", id_nom)
         st.success("Chargé !")
 
 # HEADER
 st.title("📡 Albion Monitor")
-st.markdown("### Suivi des Loyers Postérieurs (Méthode Waterfall)")
+# TITRE NEUTRE
+st.markdown("### Suivi des Échéances Post-Jugement (Méthode Waterfall)")
 
 col1, col2 = st.columns([1, 2])
 with col1:
     default_loyer = st.session_state.get("loyer_base", 0.0)
-    loyer_annuel_ht = st.number_input("Loyer Annuel Base HT (€)", value=default_loyer, step=100.0)
+    # INPUT NEUTRE
+    loyer_annuel_ht = st.number_input("Montant Annuel de Référence HT (€)", value=default_loyer, step=100.0)
 
 with col2:
     if loyer_annuel_ht > 0:
         idx_24 = INDICES["2024 (Actuel)"]
         idx_base = INDICES["BASE (2019)"]
         loyer_25_ttc = (loyer_annuel_ht * (idx_24/idx_base)) * 1.10
-        st.info(f"**Loyer 2025 indexé :** {loyer_25_ttc:,.2f} € TTC / an\nSoit **{(loyer_25_ttc/4):,.2f} € TTC / trimestre**.")
+        # INFO NEUTRE
+        st.info(f"**Montant 2025 indexé :** {loyer_25_ttc:,.2f} € TTC / an\nSoit **{(loyer_25_ttc/4):,.2f} € TTC / trimestre**.")
 
 if loyer_annuel_ht == 0: st.stop()
 
@@ -353,7 +356,7 @@ with c_pay_2:
     today = date.today()
     
     for item in base_loyers:
-        # Dette Principale
+        # Dette Principale (TYPE PRINCIPAL)
         all_debts.append({
             "date": item['date'],
             "label": item['label'],
@@ -363,7 +366,7 @@ with c_pay_2:
             "reste": item['montant'],
             "date_paiement": None
         })
-        # Pénalité (Décalage +1 jour => Le 11)
+        # Pénalité
         if today > item['date']:
             date_penalite = item['date'] + timedelta(days=1)
             all_debts.append({
@@ -376,7 +379,7 @@ with c_pay_2:
                 "date_paiement": None
             })
             
-    # Tri Prioritaire : Pénalités d'abord
+    # Tri
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
     # Paiement
