@@ -6,13 +6,14 @@ import json
 import io
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.1", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.2", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
 DATE_DEBUT_BAIL = date(2019, 6, 1)
+INDEMNITE_FORFAITAIRE = 40.0
 
-# Indices ILC (Pour indexation automatique)
+# Indices ILC
 INDICES = {
     "BASE (2019)": 114.06, 
     "2024 (Actuel)": 135.30, 
@@ -25,11 +26,10 @@ def json_serial(obj):
     raise TypeError ("Type %s not serializable" % type(obj))
 
 def date_en_francais(d):
-    """Convertit une date datetime.date en chaîne française"""
     mois = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
     return f"{d.day} {mois[d.month]} {d.year}"
 
-# --- MOTEUR DE CALCUL (Indexation ILC) ---
+# --- MOTEUR DE CALCUL ---
 def generer_echeancier_post_rj(loyer_annuel_ht_base):
     # 1. Calcul du Loyer Actuel (2025)
     loyer_mensuel_2025_ht = (loyer_annuel_ht_base / 12) * (INDICES["2024 (Actuel)"] / INDICES["BASE (2019)"])
@@ -37,38 +37,42 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
     
     echeances = []
     
-    # Échéance 1 : Solde Juin 2025 (4 jours post-jugement)
+    # Échéance 1 : Solde Juin
     montant_juin = (loyer_mensuel_2025_ttc / 30) * 4 
     echeances.append({
         "date": date(2025, 7, 10), 
         "label": "Solde Juin 2025 (Prorata)", 
-        "montant": montant_juin
+        "montant": montant_juin,
+        "is_rent": True
     })
     
     # Échéance 2 : T3 2025
     echeances.append({
         "date": date(2025, 10, 10), 
         "label": "T3 2025 (Juil-Août-Sept)", 
-        "montant": loyer_mensuel_2025_ttc * 3
+        "montant": loyer_mensuel_2025_ttc * 3,
+        "is_rent": True
     })
     
     # Échéance 3 : T4 2025
     echeances.append({
         "date": date(2026, 1, 10), 
         "label": "T4 2025 (Oct-Nov-Déc)", 
-        "montant": loyer_mensuel_2025_ttc * 3
+        "montant": loyer_mensuel_2025_ttc * 3,
+        "is_rent": True
     })
     
-    # Anticipation 2026 (Estimation)
+    # Anticipation 2026
     echeances.append({
         "date": date(2026, 4, 10), 
         "label": "T1 2026 (Jan-Fév-Mars)", 
-        "montant": loyer_mensuel_2025_ttc * 3 
+        "montant": loyer_mensuel_2025_ttc * 3,
+        "is_rent": True
     })
 
     return echeances
 
-# --- GÉNÉRATEUR PDF (Mise en Demeure) ---
+# --- GÉNÉRATEUR PDF ---
 class PDFRelance(FPDF):
     def __init__(self, user_info):
         super().__init__()
@@ -108,40 +112,38 @@ class PDFRelance(FPDF):
                "Sauf erreur ou omission de ma part, je constate a ce jour un defaut de paiement des loyers "
                "courants (nes posterieurement au jugement d'ouverture).\n\n"
                "Conformement a l'article L.622-17 I du Code de commerce, ces creances sont payables a leur echeance.\n"
-               "Le non-paiement de ces sommes constitue un motif de resiliation du bail (Art L.622-14).")
+               "Le non-paiement de ces sommes (loyers principaux et accessoires) constitue un motif de resiliation "
+               "du bail (Art L.622-14) et demontre l'impossibilite de financer la periode d'observation.")
         self.multi_cell(0, 5, txt.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(5)
         
         # Tableau
         self.set_fill_color(255, 200, 200)
         self.set_font("Arial", 'B', 9)
-        self.cell(0, 6, "DETAIL DES IMPAYES", 1, 1, 'L', fill=True)
-        self.cell(30, 6, "Echeance", 1)
+        self.cell(0, 6, "DETAIL DES IMPAYES (PRINCIPAL + INDEMNITES)", 1, 1, 'L', fill=True)
+        self.cell(30, 6, "Exigibilite", 1)
         self.cell(80, 6, "Libelle", 1)
         self.cell(30, 6, "Montant", 1)
         self.cell(30, 6, "Reste Du", 1, 1)
         
         self.set_font("Arial", '', 9)
         for row in table_rows:
+            # On affiche tout ce qui a un reste dû (Loyer ou Indemnité)
             if row['reste'] > 0.01:
+                # Police Italique pour les indemnités pour les distinguer
+                if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
+                else: self.set_font("Arial", '', 9)
+                
                 d_str = row['date'].strftime("%d/%m/%Y")
                 self.cell(30, 6, d_str, 1)
-                self.cell(80, 6, row['label'][:40], 1)
+                self.cell(80, 6, row['label'][:45].encode('latin-1', 'replace').decode('latin-1'), 1)
                 self.cell(30, 6, f"{row['montant']:.2f}", 1, 0, 'R')
-                self.set_font("Arial", 'B', 9)
                 self.cell(30, 6, f"{row['reste']:.2f}", 1, 1, 'R')
-                self.set_font("Arial", '', 9)
         
         self.ln(5)
         self.set_font("Arial", 'B', 11)
-        self.cell(0, 10, f"TOTAL A REGLER : {total_due:,.2f} EUR", 0, 1, 'R')
+        self.cell(0, 10, f"TOTAL EXIGIBLE : {total_due:,.2f} EUR", 0, 1, 'R')
         
-        # Mention frais retard
-        self.ln(5)
-        self.set_font("Arial", 'I', 9)
-        self.cell(0, 5, "Rappel : Des frais de retard s'ajoutent en cas de non paiement le 10 de chaque mois.", 0, 1)
-        
-        # RIB
         self.ln(5)
         self.set_font("Arial", '', 10)
         self.multi_cell(0, 5, "Virement sur le compte suivant :\n"
@@ -150,7 +152,6 @@ class PDFRelance(FPDF):
 
 # --- INTERFACE STREAMLIT ---
 
-# Init Session
 if 'paiements' not in st.session_state: st.session_state.paiements = []
 
 # SIDEBAR
@@ -163,8 +164,6 @@ with st.sidebar:
     id_email = st.text_input("Email")
     
     st.divider()
-    
-    # TABLEAU ILC (Demande 1)
     with st.expander("📈 Données Bail & ILC", expanded=True):
         st.write(f"**Début Bail :** {date_en_francais(DATE_DEBUT_BAIL)}")
         st.write("**Indices retenus :**")
@@ -172,8 +171,6 @@ with st.sidebar:
         st.dataframe(df_indices, hide_index=True)
     
     st.divider()
-    
-    st.header("💾 Données")
     uploaded_file = st.file_uploader("Charger sauvegarde", type=["json"])
     if uploaded_file:
         data = json.load(uploaded_file)
@@ -184,9 +181,8 @@ with st.sidebar:
 
 # HEADER
 st.title("📡 Albion Monitor")
-st.markdown("### Suivi des Loyers Postérieurs (Art. L.622-17)")
+st.markdown("### Suivi des Loyers Postérieurs & Pénalités")
 
-# INPUT LOYER
 col1, col2 = st.columns([1, 2])
 with col1:
     default_loyer = st.session_state.get("loyer_base", 0.0)
@@ -199,8 +195,7 @@ with col2:
         loyer_25_ttc = (loyer_annuel_ht * (idx_24/idx_base)) * 1.10
         st.info(f"**Loyer 2025 indexé :** {loyer_25_ttc:,.2f} € TTC / an\nSoit **{(loyer_25_ttc/4):,.2f} € TTC / trimestre**.")
 
-if loyer_annuel_ht == 0:
-    st.stop()
+if loyer_annuel_ht == 0: st.stop()
 
 st.divider()
 
@@ -221,66 +216,92 @@ with c_pay_1:
     
     if st.session_state.paiements:
         st.write("Historique :")
-        # Affichage avec date française
         disp_pay = []
         for p in st.session_state.paiements:
             disp_pay.append({"Date": date_en_francais(p["date"]), "Montant": f"{p['montant']:.2f} €"})
         st.dataframe(pd.DataFrame(disp_pay), hide_index=True)
-        
         if st.button("Supprimer dernier paiement"):
             st.session_state.paiements.pop()
             st.rerun()
 
 with c_pay_2:
-    st.subheader("📊 État des Échéances")
+    st.subheader("📊 Tableau de Bord (Cascade)")
     
-    echeances = generer_echeancier_post_rj(loyer_annuel_ht)
+    # 1. Génération des dettes théoriques (Loyers)
+    base_obligations = generer_echeancier_post_rj(loyer_annuel_ht)
+    
+    # 2. Construction de la liste finale avec Pénalités
+    final_rows = []
     total_paye = sum(p['montant'] for p in st.session_state.paiements)
     solde_dispo = total_paye
-    
-    rows = []
     total_retard = 0
     today = date.today()
     
-    for ech in echeances:
-        montant = ech['montant']
-        couverture = min(montant, solde_dispo)
+    # On boucle sur les loyers
+    for item in base_obligations:
+        # A. Traitement du Loyer Principal
+        montant_du = item['montant']
+        couverture = min(montant_du, solde_dispo)
         solde_dispo -= couverture
-        reste = montant - couverture
+        reste = montant_du - couverture
         
-        # Logique des statuts et couleurs
         statut_code = ""
-        if reste == 0:
-            statut_code = "PAYÉ" # Vert
-        elif reste > 0 and couverture > 0:
-            statut_code = "RELIQUAT" # Orange
-            if ech['date'] <= today:
-                total_retard += reste
-        elif ech['date'] <= today:
-            statut_code = "IMPAYÉ" # Rouge
-            total_retard += reste
-        else:
-            statut_code = "À ÉCHOIR" # Gris
+        is_late = False
         
-        rows.append({
-            "date": ech['date'], # Objet date pour tri/pdf
-            "Date Exigible": date_en_francais(ech['date']), # String pour affichage (Demande 5)
-            "label": ech['label'],
-            "montant": montant,
+        if reste == 0: statut_code = "PAYÉ"
+        elif reste > 0 and couverture > 0: 
+            statut_code = "RELIQUAT"
+            if item['date'] <= today: is_late = True
+        elif item['date'] <= today:
+            statut_code = "IMPAYÉ"
+            is_late = True
+        else: statut_code = "À ÉCHOIR"
+        
+        if is_late: total_retard += reste
+        
+        final_rows.append({
+            "date": item['date'],
+            "Date Exigible": date_en_francais(item['date']),
+            "label": item['label'],
+            "montant": montant_du,
             "paye": couverture,
             "reste": reste,
-            "statut": statut_code
+            "statut": statut_code,
+            "is_penalty": False
         })
         
-    df_suivi = pd.DataFrame(rows)
+        # B. Traitement Automatique de l'Indemnité (PUNISHER)
+        # Si le loyer est en retard aujourd'hui, on ajoute la pénalité
+        if is_late:
+            penalite_montant = INDEMNITE_FORFAITAIRE
+            # On essaie de payer la pénalité avec ce qui reste du solde_dispo (Waterfall)
+            penalite_couverture = min(penalite_montant, solde_dispo)
+            solde_dispo -= penalite_couverture
+            penalite_reste = penalite_montant - penalite_couverture
+            
+            penalite_statut = "DÛ (AUTO)" if penalite_reste > 0 else "PAYÉ"
+            if penalite_reste > 0: total_retard += penalite_reste
+            
+            final_rows.append({
+                "date": item['date'], # Même date que le loyer pour le tri
+                "Date Exigible": "Immédiat",
+                "label": f"↪ Indemnité Forfaitaire (Retard {item['label']})",
+                "montant": penalite_montant,
+                "paye": penalite_couverture,
+                "reste": penalite_reste,
+                "statut": penalite_statut,
+                "is_penalty": True
+            })
+
+    # 3. Affichage
+    df_suivi = pd.DataFrame(final_rows)
     
-    # Styling conditionnel (Demande 3)
     def style_rows(val):
         color = 'black'
-        if val == "PAYÉ": color = '#28a745' # Vert
-        elif val == "RELIQUAT": color = '#fd7e14' # Orange
-        elif val == "IMPAYÉ": color = '#dc3545' # Rouge
-        elif val == "À ÉCHOIR": color = '#6c757d' # Gris
+        if val == "PAYÉ": color = '#28a745'
+        elif "RELIQUAT" in val: color = '#fd7e14'
+        elif "IMPAYÉ" in val or "DÛ" in val: color = '#dc3545' # Rouge
+        elif val == "À ÉCHOIR": color = '#6c757d'
         return f'color: {color}; font-weight: bold'
 
     st.dataframe(
@@ -290,16 +311,16 @@ with c_pay_2:
         use_container_width=True
     )
     
-    # Mention Frais de Retard (Demande 2)
-    st.caption("⚠️ **Attention : Des frais de retard s'ajoutent en cas de non paiement le 10 de chaque mois.**")
+    st.caption("ℹ️ *Les indemnités de 40 € (Art. D.441-5) s'ajoutent automatiquement dès qu'une échéance est dépassée.*")
     
     if total_retard > 0.01:
-        st.error(f"⚠️ **RETARD EXIGIBLE : {total_retard:,.2f} €**")
+        st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
         
-        if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE"):
+        if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF)"):
             user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
             pdf = PDFRelance(user_data)
-            pdf.generate_letter(total_retard, rows, st.session_state.paiements)
+            # On passe final_rows pour que le PDF inclue les pénalités
+            pdf.generate_letter(total_retard, final_rows, st.session_state.paiements)
             
             st.download_button(
                 "📥 PDF Relance",
@@ -308,10 +329,8 @@ with c_pay_2:
                 mime="application/pdf"
             )
     else:
-        if total_paye > 0:
-            st.success("✅ Compte à jour.")
+        if total_paye > 0: st.success("✅ Compte à jour.")
 
-# SAUVEGARDE
 with st.sidebar:
     st.write("---")
     save_data = {
