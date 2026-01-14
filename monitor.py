@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fpdf import FPDF
 import json
 import io
@@ -9,7 +9,7 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.7 (Visual)", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.9 (Dates 11)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -27,6 +27,11 @@ INDICES = {
 def json_serial(obj):
     if isinstance(obj, (datetime, date)): return obj.isoformat()
     raise TypeError ("Type %s not serializable" % type(obj))
+
+def format_date_courte(d):
+    """Force le format JJ/MM/AAAA"""
+    if not isinstance(d, (date, datetime)): return ""
+    return d.strftime("%d/%m/%Y")
 
 def date_en_francais(d):
     if not isinstance(d, (date, datetime)): return ""
@@ -78,18 +83,15 @@ def create_debt_chart(data_rows):
     montants_payes = []
     
     for row in data_rows:
-        # On exclut les pénalités du graph pour clarté
         if "Indemnité" not in row['label']:
-            short_label = row['date'].strftime("%b %y")
+            short_label = row['raw_date'].strftime("%b %y")
             labels.append(short_label)
             montants_dus.append(row['montant'])
             montants_payes.append(row['paye'])
             
     fig, ax = plt.subplots(figsize=(7, 3))
     
-    # Barres "Dû" (Rouge - Fond)
     ax.bar(labels, montants_dus, color='#ffebee', edgecolor='#ef5350', label='Dû', width=0.6)
-    # Barres "Payé" (Vert - Devant)
     ax.bar(labels, montants_payes, color='#c8e6c9', edgecolor='#66bb6a', label='Payé', width=0.6)
     
     ax.set_ylabel('Euros (€)', fontsize=8)
@@ -165,7 +167,7 @@ class PDFRelance(FPDF):
             
         self.ln(8)
 
-        # 3. Détail Pénalités (Avec Description Période)
+        # 3. Détail Pénalités
         self.set_font("Arial", 'B', 10)
         self.cell(0, 7, "II. DETAIL DES INDEMNITES DE RETARD (Art. D.441-5)", 1, 1, 'L', fill=True)
         
@@ -179,8 +181,8 @@ class PDFRelance(FPDF):
         for row in table_rows:
             if "Indemnité" in row['label']:
                 has_penalty = True
-                d_str = row['date'].strftime("%d/%m/%Y")
-                # On extrait la description propre
+                # Format JJ/MM/AAAA
+                d_str = row['raw_date'].strftime("%d/%m/%Y")
                 desc = row['label'].replace("↪ ", "")
                 self.cell(40, 6, d_str, 1)
                 self.cell(110, 6, desc.encode('latin-1', 'replace').decode('latin-1'), 1)
@@ -196,7 +198,6 @@ class PDFRelance(FPDF):
         # --- PAGE 2 : COURRIER JURIDIQUE ---
         self.add_page()
         
-        # En-tête
         self.set_font("Arial", 'B', 11)
         self.cell(0, 5, self.user_info.get('nom', ''), 0, 1)
         self.set_font("Arial", '', 10)
@@ -228,7 +229,6 @@ class PDFRelance(FPDF):
         self.multi_cell(0, 5, txt.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(5)
         
-        # Tableau Récapitulatif Dettes
         self.set_fill_color(255, 200, 200)
         self.set_font("Arial", 'B', 9)
         self.cell(0, 6, "RESTE A REGLER CE JOUR (DETAILS EN PAGE 1)", 1, 1, 'L', fill=True)
@@ -240,11 +240,11 @@ class PDFRelance(FPDF):
         self.set_font("Arial", '', 9)
         for row in table_rows:
             if row['reste'] > 0.01:
-                # Italique pour pénalités
                 if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
                 else: self.set_font("Arial", '', 9)
                 
-                d_str = row['date'].strftime("%d/%m/%Y")
+                # Format JJ/MM/AAAA
+                d_str = row['raw_date'].strftime("%d/%m/%Y")
                 self.cell(30, 6, d_str, 1)
                 self.cell(80, 6, row['label'][:45].encode('latin-1', 'replace').decode('latin-1'), 1)
                 self.cell(30, 6, f"{row['montant']:.2f}", 1, 0, 'R')
@@ -275,7 +275,7 @@ with st.sidebar:
     
     st.divider()
     with st.expander("📈 Données Bail & ILC", expanded=True):
-        st.write(f"**Début Bail :** {date_en_francais(DATE_DEBUT_BAIL)}")
+        st.write(f"**Début Bail :** {format_date_courte(DATE_DEBUT_BAIL)}")
         df_indices = pd.DataFrame(list(INDICES.items()), columns=["Période", "Valeur"])
         st.dataframe(df_indices, hide_index=True)
     
@@ -328,13 +328,13 @@ with c_pay_1:
         st.write("Historique :")
         disp_pay = []
         for p in st.session_state.paiements:
-            disp_pay.append({"Date": date_en_francais(p["date"]), "Montant": f"{p['montant']:.2f} €"})
+            disp_pay.append({"Date": format_date_courte(p["date"]), "Montant": f"{p['montant']:.2f} €"})
         st.dataframe(pd.DataFrame(disp_pay), hide_index=True)
         if st.button("Supprimer dernier paiement"):
             st.session_state.paiements.pop()
             st.rerun()
 
-# CŒUR DU SYSTÈME : CASCADE WATERFALL AVEC DATE DE PAIEMENT
+# CŒUR DU SYSTÈME
 with c_pay_2:
     st.subheader("📊 Tableau de Bord (Calculé)")
     
@@ -343,7 +343,7 @@ with c_pay_2:
     today = date.today()
     
     for item in base_loyers:
-        # 1. Création Dette Principale
+        # Dette Principale
         all_debts.append({
             "date": item['date'],
             "label": item['label'],
@@ -353,16 +353,12 @@ with c_pay_2:
             "reste": item['montant'],
             "date_paiement": None
         })
-        
-        # 2. Création Pénalité (Si date dépassée)
+        # Pénalité (Décalage +1 jour => Le 11)
         if today > item['date']:
-            # Création du libellé précis pour le PDF
-            # Ex: "Indemnité (Retard T3 2025)"
-            penalite_label = f"↪ Indemnité (Retard {item['label']})"
-            
+            date_penalite = item['date'] + timedelta(days=1) # Le 11 du mois
             all_debts.append({
-                "date": item['date'], 
-                "label": penalite_label,
+                "date": date_penalite, 
+                "label": f"↪ Indemnité (Retard {item['label']})",
                 "montant": INDEMNITE_FORFAITAIRE,
                 "type": "PENALITE", 
                 "paye": 0.0,
@@ -370,10 +366,10 @@ with c_pay_2:
                 "date_paiement": None
             })
             
-    # Tri Prioritaire : Pénalités d'abord
+    # Tri Prioritaire : Pénalités d'abord (car type PENALITE=0)
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
-    # Consommation des paiements
+    # Paiement
     available_payments = [p.copy() for p in st.session_state.paiements] 
     total_retard = 0
     total_penalties_acc = 0
@@ -394,7 +390,6 @@ with c_pay_2:
             payment_date_for_this_debt = pay['date']
             
         debt['date_paiement'] = payment_date_for_this_debt
-        
         debt['jours_retard'] = 0
         target_date = debt['date']
         
@@ -419,10 +414,10 @@ with c_pay_2:
         elif today < d['date']: statut = "⚪ À ÉCHOIR"
         else: statut = "🔴 IMPAYÉ"
         
-        date_pay_str = date_en_francais(d['date_paiement']) if d['date_paiement'] else "-"
+        date_pay_str = format_date_courte(d['date_paiement']) if d['date_paiement'] else "-"
         
         final_rows.append({
-            "Echéance": d['date'], # Objet pour le tri
+            "Echéance": format_date_courte(d['date']), 
             "Libellé": d['label'],
             "Montant": d['montant'],
             "Payé": d['paye'],
@@ -436,15 +431,9 @@ with c_pay_2:
 
     df_suivi = pd.DataFrame(final_rows)
     
-    # Configuration des colonnes pour dates en Français
     st.dataframe(
         df_suivi,
         column_config={
-            # Astuce : On force l'affichage en texte via une colonne calculée, 
-            # mais ici on utilise le format DateColumn standard qui est propre (YYYY-MM-DD ou local).
-            # SI vous voulez absolument "10 octobre 2025" dans le tableau Streamlit, 
-            # il faut remplacer la colonne objet par une string.
-            # Je fais le mapping ici pour l'affichage :
             "Echéance": st.column_config.TextColumn("Echéance"), 
             "Libellé": st.column_config.TextColumn("Libellé", width="large"),
             "Montant": st.column_config.NumberColumn("Montant", format="%.2f €"),
@@ -460,14 +449,6 @@ with c_pay_2:
         hide_index=True
     )
     
-    # Petit hack pour afficher les dates en français dans le dataframe
-    # (Streamlit affiche par défaut YYYY-MM-DD pour les objets date)
-    df_display_french = df_suivi.copy()
-    df_display_french["Echéance"] = df_display_french["raw_date"].apply(date_en_francais)
-    # On remplace le dataframe affiché au dessus par celui-ci si on veut le full français
-    # (Je laisse le code ci-dessus tel quel car il est robuste, mais sachez que la config column date 
-    # affichera souvent le format local du navigateur).
-
     if total_retard > 0.01:
         st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
         
@@ -482,7 +463,8 @@ with c_pay_2:
                     "label": r['raw_label'],
                     "montant": r['Montant'],
                     "paye": r['Payé'], 
-                    "reste": r['Reste Dû']
+                    "reste": r['Reste Dû'],
+                    "raw_date": r['raw_date']
                 })
                 
             pdf.generate_report(total_retard, rows_for_pdf, st.session_state.paiements, total_penalties_acc)
