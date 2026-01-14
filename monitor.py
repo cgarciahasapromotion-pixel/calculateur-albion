@@ -4,9 +4,11 @@ from datetime import date, datetime
 from fpdf import FPDF
 import json
 import io
+import matplotlib.pyplot as plt
+import tempfile
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.5 (Lease Enforcer)", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.6 (Auditor)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -32,7 +34,6 @@ def date_en_francais(d):
 
 # --- MOTEUR DE CALCUL ---
 def generer_echeancier_post_rj(loyer_annuel_ht_base):
-    # 1. Calcul du Loyer Actuel (2025)
     loyer_mensuel_2025_ht = (loyer_annuel_ht_base / 12) * (INDICES["2024 (Actuel)"] / INDICES["BASE (2019)"])
     loyer_mensuel_2025_ttc = loyer_mensuel_2025_ht * 1.10 
     
@@ -73,6 +74,40 @@ def generer_echeancier_post_rj(loyer_annuel_ht_base):
 
     return echeances
 
+# --- GÉNÉRATEUR GRAPHIQUE (MATPLOTLIB) ---
+def create_debt_chart(data_rows):
+    # Préparation des données pour le graph
+    labels = []
+    montants_dus = []
+    montants_payes = []
+    
+    for row in data_rows:
+        # On ne prend que les lignes principales (pas les pénalités pour la lisibilité du graph global)
+        if "Indemnité" not in row['label']:
+            short_label = row['date'].strftime("%b %y") # Ex: Oct 25
+            labels.append(short_label)
+            montants_dus.append(row['montant'])
+            montants_payes.append(row['paye'])
+            
+    fig, ax = plt.subplots(figsize=(7, 3))
+    
+    # Barres "Dû" (Rouge - Fond)
+    ax.bar(labels, montants_dus, color='#ffebee', edgecolor='#ef5350', label='Montant Dû', width=0.6)
+    # Barres "Payé" (Vert - Devant)
+    ax.bar(labels, montants_payes, color='#c8e6c9', edgecolor='#66bb6a', label='Montant Payé', width=0.6)
+    
+    ax.set_ylabel('Montant (€)', fontsize=8)
+    ax.set_title('Suivi Visuel des Paiements (Dû vs Payé)', fontsize=10, fontweight='bold')
+    ax.legend(fontsize=8)
+    ax.tick_params(axis='both', which='major', labelsize=8)
+    
+    # Clean up borders
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    plt.tight_layout()
+    return fig
+
 # --- GÉNÉRATEUR PDF ---
 class PDFRelance(FPDF):
     def __init__(self, user_info):
@@ -82,13 +117,18 @@ class PDFRelance(FPDF):
     def header(self):
         self.set_font('Arial', 'I', 8)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 10, f"Suivi Execution Bail - HOTEL ALBION - Lot {self.user_info.get('lot', '?')}", 0, 1, 'R')
+        self.cell(0, 10, f"Suivi Comptable & Juridique - HOTEL ALBION - Lot {self.user_info.get('lot', '?')}", 0, 1, 'R')
         self.set_text_color(0, 0, 0)
 
-    def generate_letter(self, total_due, table_rows, history_payments):
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+    def generate_letter(self, total_due, table_rows, history_payments, total_penalties_amount):
         self.add_page()
         
-        # En-tête
+        # --- PAGE 1 : MISE EN DEMEURE ---
         self.set_font("Arial", 'B', 11)
         self.cell(0, 5, self.user_info.get('nom', ''), 0, 1)
         self.set_font("Arial", '', 10)
@@ -100,32 +140,29 @@ class PDFRelance(FPDF):
         self.cell(0, 5, "A l'attention de l'Administrateur Judiciaire", 0, 1, 'R')
         self.ln(15)
         
-        # Titre
         self.set_font("Arial", 'B', 14)
         self.cell(0, 10, "MISE EN DEMEURE DE PAYER SOUS HUITAINE", 0, 1, 'C')
         self.set_font("Arial", 'B', 10)
         self.cell(0, 5, "(Loyers Post-Jugement - Art. L.622-17 Code de commerce)", 0, 1, 'C')
         self.ln(10)
         
-        # Corps (VERSION RENFORCÉE BAIL)
         self.set_font("Arial", '', 10)
         txt = ("Maitre,\n\n"
-               "Je constate a ce jour un defaut de paiement des loyers courants (nes posterieurement au jugement d'ouverture).\n\n"
+               "Je constate a ce jour un defaut de paiement persistant sur les loyers courants.\n\n"
                "Conformement a l'Article 11 du bail, ces sommes etaient exigibles le 10 du mois. "
-               "L'Article L.622-17 I du Code de commerce impose leur paiement a l'echeance.\n\n"
-               "Je vous rappelle les dispositions contractuelles suivantes :\n"
-               "- Art 4-10 (Clause de non-tolerance) : Aucun retard passe ou tolerance de ma part ne vaut renonciation a l'application stricte des delais.\n"
-               "- Art 15 (Frais) : Tous les frais de recouvrement sont a la charge exclusive du preneur.\n"
-               "- Art L.441-10 C.Com : L'indemnite forfaitaire de 40 EUR est due de plein droit des le 11 du mois.\n\n"
-               "Note : Les paiements partiels recus ont ete imputes prioritairement sur les penalites (Art 1343-1 Code Civil).")
-        
+               "L'Article L.622-17 I du Code de commerce impose leur paiement strict a l'echeance.\n\n"
+               "Je vous rappelle les dispositions contractuelles et legales :\n"
+               "- Art 4-10 (Non-tolerance) : Aucun retard passe ne vaut droit acquis.\n"
+               "- Art 15 (Frais) : Les frais de recouvrement sont a votre charge exclusive.\n"
+               "- Art L.441-10 : L'indemnite forfaitaire de 40 EUR est due de plein droit pour chaque echeance en retard.\n\n"
+               "Les paiements recus ont ete imputes prioritairement sur les penalites (Art 1343-1 Code Civil).")
         self.multi_cell(0, 5, txt.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(5)
         
-        # Tableau
+        # TABLEAU SYNTHÉTIQUE
         self.set_fill_color(255, 200, 200)
         self.set_font("Arial", 'B', 9)
-        self.cell(0, 6, "DETAIL DES IMPAYES (METHODE WATERFALL)", 1, 1, 'L', fill=True)
+        self.cell(0, 6, "ETAT DES DETTES EXIGIBLES CE JOUR", 1, 1, 'L', fill=True)
         self.cell(30, 6, "Exigibilite", 1)
         self.cell(80, 6, "Libelle", 1)
         self.cell(30, 6, "Montant", 1)
@@ -145,13 +182,82 @@ class PDFRelance(FPDF):
         
         self.ln(5)
         self.set_font("Arial", 'B', 11)
-        self.cell(0, 10, f"TOTAL EXIGIBLE : {total_due:,.2f} EUR", 0, 1, 'R')
+        self.cell(0, 10, f"NET A PAYER : {total_due:,.2f} EUR", 0, 1, 'R')
         
         self.ln(5)
         self.set_font("Arial", '', 10)
-        self.multi_cell(0, 5, "Virement sur le compte suivant :\n"
-                              f"IBAN : {self.user_info.get('iban', '')}\n"
-                              f"BIC : {self.user_info.get('bic', '')}")
+        self.multi_cell(0, 5, f"IBAN : {self.user_info.get('iban', '')}\nBIC : {self.user_info.get('bic', '')}")
+
+        # --- PAGE 2 : ANNEXE AUDIT ---
+        self.add_page()
+        self.set_font("Arial", 'B', 12)
+        self.cell(0, 10, "ANNEXE : AUDIT COMPTABLE & TRACABILITE", 0, 1, 'C')
+        self.ln(5)
+
+        # 1. Graphique
+        try:
+            fig = create_debt_chart(table_rows)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                fig.savefig(tmp_file.name, format="png", dpi=100)
+                tmp_path = tmp_file.name
+            
+            self.image(tmp_path, x=10, w=190)
+            os.unlink(tmp_path)
+            self.ln(5)
+        except Exception as e:
+            self.cell(0, 10, f"Graphique non disponible: {e}", 0, 1)
+
+        # 2. Historique des Paiements
+        self.set_font("Arial", 'B', 10)
+        self.set_fill_color(240, 240, 240)
+        self.cell(0, 8, "I. HISTORIQUE DES VIREMENTS RECUS", 1, 1, 'L', fill=True)
+        
+        if history_payments:
+            self.set_font("Arial", 'B', 9)
+            self.cell(50, 6, "Date Reception", 1)
+            self.cell(50, 6, "Montant", 1, 1)
+            self.set_font("Arial", '', 9)
+            total_history = 0
+            for p in history_payments:
+                d_str = p['date'].strftime("%d/%m/%Y")
+                self.cell(50, 6, d_str, 1)
+                self.cell(50, 6, f"{p['montant']:.2f} EUR", 1, 1, 'R')
+                total_history += p['montant']
+            self.set_font("Arial", 'B', 9)
+            self.cell(50, 6, "TOTAL", 1)
+            self.cell(50, 6, f"{total_history:.2f} EUR", 1, 1, 'R')
+        else:
+            self.set_font("Arial", 'I', 9)
+            self.cell(0, 6, "Aucun virement enregistre a ce jour.", 1, 1)
+            
+        self.ln(10)
+
+        # 3. Compteur Pénalités
+        self.set_font("Arial", 'B', 10)
+        self.cell(0, 8, "II. VENTILATION DES FRAIS DE RETARD (Art. D.441-5)", 1, 1, 'L', fill=True)
+        self.set_font("Arial", '', 9)
+        self.multi_cell(0, 5, "Le tableau ci-dessous recense l'ensemble des indemnites forfaitaires generees par le non-respect des echeances contractuelles (Paiement le 10 du mois).")
+        self.ln(2)
+        
+        self.set_font("Arial", 'B', 9)
+        self.cell(140, 6, "Motif de la penalite", 1)
+        self.cell(30, 6, "Montant", 1, 1)
+        self.set_font("Arial", '', 9)
+        
+        has_penalty = False
+        for row in table_rows:
+            if "Indemnité" in row['label']:
+                has_penalty = True
+                self.cell(140, 6, row['label'].encode('latin-1', 'replace').decode('latin-1'), 1)
+                self.cell(30, 6, "40.00 EUR", 1, 1, 'R')
+        
+        if not has_penalty:
+            self.cell(170, 6, "Aucune penalite a ce jour.", 1, 1)
+        
+        self.ln(2)
+        self.set_font("Arial", 'B', 9)
+        self.cell(140, 6, "CUMUL TOTAL DES PENALITES GENEREES", 1)
+        self.cell(30, 6, f"{total_penalties_amount:.2f} EUR", 1, 1, 'R')
 
 # --- INTERFACE STREAMLIT ---
 
@@ -167,18 +273,9 @@ with st.sidebar:
     id_email = st.text_input("Email")
     
     st.divider()
-    # NOUVEAU : ENCART JURIDIQUE
-    with st.expander("⚖️ Armes Juridiques (Bail)", expanded=True):
-        st.info("""
-        **Art. 11 :** Paiement le 10 du mois.
-        **Art. 4-10 :** Non-tolérance (Aucun retard n'est un droit acquis).
-        **Art. 15 :** Frais de recouvrement à charge du locataire.
-        **Art. 14 :** Résiliation si impayé > 1 mois.
-        **L.441-10 :** 40€ dus dès le 11 du mois.
-        """)
-        
-    with st.expander("📈 Données ILC", expanded=False):
+    with st.expander("📈 Données Bail & ILC", expanded=True):
         st.write(f"**Début Bail :** {date_en_francais(DATE_DEBUT_BAIL)}")
+        st.write("**Indices retenus :**")
         df_indices = pd.DataFrame(list(INDICES.items()), columns=["Période", "Valeur"])
         st.dataframe(df_indices, hide_index=True)
     
@@ -221,7 +318,7 @@ with c_pay_1:
         m_pay = st.number_input("Montant (€)", step=100.0)
         if st.form_submit_button("Ajouter"):
             if d_pay <= DATE_JUGEMENT:
-                st.error("Date antérieure au jugement. Utilisez l'app 'Déclaration'.")
+                st.error("Date antérieure au jugement.")
             else:
                 st.session_state.paiements.append({"date": d_pay, "montant": m_pay})
                 st.session_state.paiements.sort(key=lambda x: x['date']) 
@@ -258,12 +355,11 @@ with c_pay_2:
             "date_paiement": None
         })
         
-        # La pénalité si retard (Trigger le 11 du mois, donc > 10)
-        # Note : item['date'] est le 10. Si today > item['date'], on est le 11 ou plus.
+        # La pénalité si retard
         if today > item['date']:
             all_debts.append({
                 "date": item['date'], 
-                "label": f"↪ Indemnité Forfaitaire (Art L.441-10 & Art 15 Bail)",
+                "label": f"↪ Indemnité Forfaitaire (Art L.441-10)",
                 "montant": INDEMNITE_FORFAITAIRE,
                 "type": "PENALITE", 
                 "paye": 0.0,
@@ -274,11 +370,15 @@ with c_pay_2:
     # 2. Tri pour ordre de paiement (Pénalités d'abord)
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
-    # 3. Application du Paiement (Consommation des virements un par un)
+    # 3. Application du Paiement
     available_payments = [p.copy() for p in st.session_state.paiements] 
     total_retard = 0
+    total_penalties_acc = 0
     
     for debt in debts_to_pay:
+        if debt['type'] == "PENALITE":
+            total_penalties_acc += debt['montant']
+            
         payment_date_for_this_debt = None
         for pay in available_payments:
             if pay['montant'] <= 0: continue 
@@ -292,7 +392,6 @@ with c_pay_2:
             
         debt['date_paiement'] = payment_date_for_this_debt
         
-        # Calcul Jours Retard
         debt['jours_retard'] = 0
         target_date = debt['date']
         
@@ -303,7 +402,7 @@ with c_pay_2:
             delta = (today - target_date).days
             debt['jours_retard'] = max(0, delta)
 
-        if debt['reste'] > 0.01 and today > target_date: # Uniquement si date dépassée
+        if debt['reste'] > 0.01 and today > target_date:
             total_retard += debt['reste']
 
     # 4. Remise en ordre Chrono
@@ -312,15 +411,11 @@ with c_pay_2:
     final_rows = []
     for d in debts_display:
         statut = ""
-        # Si c'est une pénalité, le statut est différent
-        is_future = d['date'] > today
-        
         if d['reste'] < 0.01: statut = "✅ PAYÉ"
         elif d['reste'] < d['montant']: statut = "🟠 PARTIEL"
-        elif is_future: statut = "⚪ À ÉCHOIR"
-        else: statut = "🔴 IMPAYÉ" # Ou DÛ pour pénalité
+        elif today < d['date']: statut = "⚪ À ÉCHOIR"
+        else: statut = "🔴 IMPAYÉ"
         
-        # Formatage date
         date_pay_str = date_en_francais(d['date_paiement']) if d['date_paiement'] else "-"
         
         final_rows.append({
@@ -360,7 +455,7 @@ with c_pay_2:
     if total_retard > 0.01:
         st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
         
-        if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF)"):
+        if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF + GRAPH)"):
             user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
             pdf = PDFRelance(user_data)
             
@@ -370,10 +465,11 @@ with c_pay_2:
                     "date": r['raw_date'],
                     "label": r['raw_label'],
                     "montant": r['Montant'],
+                    "paye": r['Payé'], # Pour le graph
                     "reste": r['Reste Dû']
                 })
                 
-            pdf.generate_letter(total_retard, rows_for_pdf, st.session_state.paiements)
+            pdf.generate_letter(total_retard, rows_for_pdf, st.session_state.paiements, total_penalties_acc)
             
             st.download_button(
                 "📥 PDF Relance",
