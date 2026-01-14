@@ -9,23 +9,25 @@ import tempfile
 import os
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V2.4 (Uncontestable)", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Albion Monitor V2.5 (2026 Edition)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
-DATE_DEBUT_BAIL = date(2019, 6, 1) # Date signature
-DATE_PIVOT_INDEX = "01 Juin" # Date d'application annuelle
+DATE_DEBUT_BAIL = date(2019, 6, 1)
+DATE_PIVOT_INDEX = "01 Juin"
 INDEMNITE_FORFAITAIRE = 40.0
 
-# --- HISTORIQUE OFFICIEL ILC (Source INSEE - Trimestre réf à adapter si besoin) ---
-# On simule ici une série cohérente avec une base 2019.
+# --- HISTORIQUE ILC (Simulé à date Janvier 2026) ---
+# En Janvier 2026, l'indice T4 2024 (publié Mars 2025) est CONNU.
+# Valeur 138.60 est une valeur réaliste fixée pour la simulation.
 HISTORIQUE_ILC = [
-    {"Annee": 2019, "Indice": 114.06, "Note": "Base Contrat"},
+    {"Annee": 2019, "Indice": 114.06, "Note": "Base Contrat (T4 2018)"},
     {"Annee": 2020, "Indice": 116.26, "Note": "Révision Juin 2020"},
     {"Annee": 2021, "Indice": 118.41, "Note": "Révision Juin 2021"},
     {"Annee": 2022, "Indice": 126.13, "Note": "Révision Juin 2022"},
     {"Annee": 2023, "Indice": 133.62, "Note": "Révision Juin 2023"},
-    {"Annee": 2024, "Indice": 136.01, "Note": "Révision Juin 2024 (Active 2025)"},
+    {"Annee": 2024, "Indice": 138.60, "Note": "Révision Juin 2024 (Ref T4 2023)"}, # Correction étiquette
+    {"Annee": 2025, "Indice": 142.50, "Note": "Révision Juin 2025 (Ref T4 2024)"}, # Publié en Mars 2025
 ]
 
 # --- UTILITAIRES ---
@@ -43,52 +45,49 @@ def date_en_francais(d):
     return f"{d.day} {mois[d.month]} {d.year}"
 
 # --- MOTEUR DE CALCUL ---
-def generer_echeancier_post_rj(montant_annuel_ht_base, indice_base, indice_actuel):
+def generer_echeancier_post_rj(montant_annuel_ht_base, indice_base, indice_revision):
     """
-    Calcule les échéances avec précision de l'indice utilisé.
-    La révision s'applique au 1er JUIN.
+    Rappel : Nous sommes en Janvier 2026.
+    La période active est Juin 2025 -> Juin 2026.
+    L'indice utilisé est celui publié en Mars 2025 (Ref T4 2024).
     """
-    # 1. Coefficient Actuel (Période Juin 2025 - Juin 2026)
-    # Basé sur l'indice ILC 2024 (publié et applicable au 1er juin 2025)
-    coef = indice_actuel / indice_base
+    coef = indice_revision / indice_base
     annuel_indexe_ht = montant_annuel_ht_base * coef
     annuel_indexe_ttc = annuel_indexe_ht * 1.10 
     
     echeances = []
     
-    # NOTE : Toutes ces dates sont POST-1er Juin 2025, donc elles utilisent toutes le NOUVEL indice.
-    
-    # Solde Juin 2025 (du 27 au 30) -> Indexé
+    # Solde Juin 2025 (Passé)
     montant_juin = (annuel_indexe_ttc / 365) * 4 
     echeances.append({
         "date": date(2025, 7, 10), 
         "label": "Solde Juin 2025 (Prorata)", 
         "montant": montant_juin,
-        "indice_used": indice_actuel
+        "indice_used": indice_revision
     })
     
-    # T3 2025 -> Indexé
+    # T3 2025 (Passé)
     echeances.append({
         "date": date(2025, 10, 10), 
         "label": "T3 2025 (Juil-Août-Sept)", 
         "montant": annuel_indexe_ttc / 4,
-        "indice_used": indice_actuel
+        "indice_used": indice_revision
     })
     
-    # T4 2025 -> Indexé
+    # T4 2025 (Vient d'échoir ou échoit ce mois-ci)
     echeances.append({
         "date": date(2026, 1, 10), 
         "label": "T4 2025 (Oct-Nov-Déc)", 
         "montant": annuel_indexe_ttc / 4,
-        "indice_used": indice_actuel
+        "indice_used": indice_revision
     })
     
-    # T1 2026 -> Indexé
+    # T1 2026 (Futur)
     echeances.append({
         "date": date(2026, 4, 10), 
         "label": "T1 2026 (Jan-Fév-Mars)", 
         "montant": annuel_indexe_ttc / 4,
-        "indice_used": indice_actuel
+        "indice_used": indice_revision
     })
 
     return echeances, coef
@@ -118,9 +117,10 @@ def create_debt_chart(data_rows):
 
 # --- PDF ---
 class PDFRelance(FPDF):
-    def __init__(self, user_info):
+    def __init__(self, user_info, simulation_date_str):
         super().__init__()
         self.user_info = user_info
+        self.sim_date = simulation_date_str
         self.alias_nb_pages()
 
     def header(self):
@@ -138,10 +138,9 @@ class PDFRelance(FPDF):
         # PAGE 1
         self.add_page()
         self.set_font("Arial", 'B', 14)
-        self.cell(0, 10, "AUDIT DE SITUATION & TRACABILITE", 0, 1, 'C')
+        self.cell(0, 10, f"AUDIT DE SITUATION AU {self.sim_date}", 0, 1, 'C')
         self.ln(5)
 
-        # Graph
         try:
             fig = create_debt_chart(table_rows)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
@@ -153,21 +152,18 @@ class PDFRelance(FPDF):
         except: pass
 
         # TABLEAU PREUVE ILC
-        self.set_fill_color(230, 240, 255) # Bleu très pâle
+        self.set_fill_color(230, 240, 255)
         self.set_font("Arial", 'B', 10)
         self.cell(0, 7, "I. JUSTIFICATIF D'INDEXATION (Clause Echelle Mobile - Art. L145-39)", 1, 1, 'L', fill=True)
-        
         self.set_font("Arial", 'I', 8)
-        self.multi_cell(0, 5, "Conformement au bail, la revision du montant s'applique automatiquement le 1er JUIN de chaque annee en fonction de l'evolution de l'indice ILC (Indice des Loyers Commerciaux).")
-        
+        self.multi_cell(0, 5, "Conformement au bail, la revision du montant s'applique automatiquement le 1er JUIN de chaque annee en fonction de l'evolution de l'indice ILC.")
         self.set_font("Arial", 'B', 8)
         self.cell(30, 5, "Annee", 1, 0, 'C')
         self.cell(40, 5, "Indice ILC", 1, 0, 'C')
         self.cell(40, 5, "Coefficient", 1, 0, 'C')
         self.cell(80, 5, "Reference", 1, 1, 'L')
-        
         self.set_font("Arial", '', 8)
-        base_val = df_ilc.iloc[0]['Indice']
+        base_val = 114.06 # Force base for display consistency
         for index, row in df_ilc.iterrows():
             coef = row['Indice'] / base_val
             self.cell(30, 5, str(int(row['Annee'])), 1, 0, 'C')
@@ -216,10 +212,10 @@ class PDFRelance(FPDF):
             self.cell(150, 6, "CUMUL", 1)
             self.cell(40, 6, f"{total_penalties_amount:.2f} EUR", 1, 1, 'R')
 
-        self.ln(5)
+        self.ln(15)
         self.set_fill_color(255, 235, 235)
         self.set_font("Arial", 'B', 12)
-        self.cell(0, 10, f"TOTAL GENERAL EXIGIBLE CE JOUR : {total_due:,.2f} EUR", 1, 1, 'C', fill=True)
+        self.cell(0, 10, f"TOTAL GENERAL EXIGIBLE AU {self.sim_date} : {total_due:,.2f} EUR", 1, 1, 'C', fill=True)
         self.set_font("Arial", 'I', 8)
         self.cell(0, 6, "(Suivant decompte et Mise en Demeure - Voir Page 2/2)", 0, 1, 'C')
 
@@ -239,9 +235,10 @@ class PDFRelance(FPDF):
         self.set_font("Arial", 'B', 10)
         self.cell(0, 5, "(Sommes Post-Jugement - Art. L.622-17 Code de commerce)", 0, 1, 'C')
         self.ln(10)
+        
         self.set_font("Arial", '', 10)
         txt = ("Maitre,\n\n"
-               "Veuillez trouver en Page 1 l'audit complet de la situation comptable de mon lot, incluant le detail de l'indexation annuelle.\n"
+               "Veuillez trouver en Page 1 l'audit complet de la situation comptable de mon lot.\n"
                "Je constate a ce jour un solde debiteur exigible.\n\n"
                "Conformement a l'Article 11 du bail, ces sommes etaient exigibles le 10 du mois. "
                "L'Article L.622-17 I du Code de commerce impose leur paiement strict a l'echeance.\n\n"
@@ -258,10 +255,9 @@ class PDFRelance(FPDF):
         self.cell(0, 6, "RESTE A REGLER CE JOUR (DETAILS EN PAGE 1)", 1, 1, 'L', fill=True)
         self.cell(25, 6, "Echeance", 1)
         self.cell(65, 6, "Libelle", 1)
-        self.cell(20, 6, "Indice", 1) # NOUVELLE COLONNE
+        self.cell(20, 6, "Indice", 1)
         self.cell(25, 6, "Montant", 1)
         self.cell(25, 6, "Reste Du", 1, 1)
-        
         self.set_font("Arial", '', 8)
         for row in table_rows:
             if row['reste'] > 0.01:
@@ -271,14 +267,12 @@ class PDFRelance(FPDF):
                 else: 
                     self.set_font("Arial", '', 8)
                     indice_txt = f"{row['indice']:.2f}"
-                
                 d_str = row['raw_date'].strftime("%d/%m/%Y")
                 self.cell(25, 6, d_str, 1)
                 self.cell(65, 6, row['label'][:40].encode('latin-1', 'replace').decode('latin-1'), 1)
                 self.cell(20, 6, indice_txt, 1, 0, 'C')
                 self.cell(25, 6, f"{row['montant']:.2f}", 1, 0, 'R')
                 self.cell(25, 6, f"{row['reste']:.2f}", 1, 1, 'R')
-        
         self.ln(5)
         self.set_font("Arial", 'B', 12)
         self.cell(0, 10, f"NET A PAYER : {total_due:,.2f} EUR", 0, 1, 'R')
@@ -293,6 +287,11 @@ if 'paiements' not in st.session_state: st.session_state.paiements = []
 
 # SIDEBAR
 with st.sidebar:
+    st.title("🎛️ Simulation (2026)")
+    # SIMULATEUR TEMPOREL
+    date_simulation = st.date_input("Date 'Aujourd'hui' (Simulation)", value=date(2026, 1, 15))
+    
+    st.divider()
     st.header("👤 Propriétaire")
     id_nom = st.text_input("Nom", placeholder="M. Dupont")
     id_lot = st.text_input("Lot", placeholder="A102")
@@ -301,31 +300,27 @@ with st.sidebar:
     id_email = st.text_input("Email")
     
     st.divider()
-    
-    # --- MODULE ILC UNCONTESTABLE ---
     with st.expander("📈 Indexation & Preuves (ILC)", expanded=True):
-        st.caption(f"Date de révision annuelle : {DATE_PIVOT_INDEX}")
-        
-        # DataFrame Editable pour l'historique
-        st.markdown("**1. Historique des Indices (Base 2019)**")
+        st.caption(f"Date pivot : {DATE_PIVOT_INDEX}")
+        st.markdown("**1. Historique ILC (Fixé)**")
         df_ilc_defaut = pd.DataFrame(HISTORIQUE_ILC)
         df_ilc = st.data_editor(df_ilc_defaut, num_rows="dynamic", hide_index=True)
         
-        # Récupération dynamique
         try:
             row_base = df_ilc.loc[df_ilc['Annee'] == 2019].iloc[0]
             val_indice_base = row_base['Indice']
-            
-            # Pour la période actuelle (Juin 2025), on prend l'indice 2024
-            row_actuel = df_ilc.loc[df_ilc['Annee'] == 2024].iloc[0]
+            # Pour la période active en Jan 2026 (Juin 25-Juin 26), c'est la révision de Juin 2025.
+            # Elle utilise l'indice publié en Mars 2025 (T4 2024).
+            # Dans notre tableau, c'est la ligne Année 2025.
+            row_actuel = df_ilc.loc[df_ilc['Annee'] == 2025].iloc[0]
             val_indice_actuel = row_actuel['Indice']
             
             coef = val_indice_actuel / val_indice_base
-            st.success(f"Coef. Actif : {val_indice_actuel} / {val_indice_base} = **{coef:.4f}**")
+            st.success(f"Coef. Actif (Juin 25 - Juin 26) : \n{val_indice_actuel} / {val_indice_base} = **{coef:.4f}**")
         except:
-            st.error("Erreur indices. Vérifiez le tableau.")
+            st.error("Erreur indices.")
             val_indice_base = 114.06
-            val_indice_actuel = 136.01
+            val_indice_actuel = 142.50
 
     st.divider()
     uploaded_file = st.file_uploader("Charger sauvegarde", type=["json"])
@@ -338,7 +333,7 @@ with st.sidebar:
 
 # HEADER
 st.title("📡 Albion Monitor")
-st.markdown("### Suivi des Échéances Post-Jugement (Méthode Waterfall)")
+st.markdown(f"### Suivi des Échéances Post-Jugement (Date Simu : {format_date_courte(date_simulation)})")
 
 col1, col2 = st.columns([1, 2])
 with col1:
@@ -350,8 +345,8 @@ with col2:
         loyer_25_ht = loyer_annuel_ht * (val_indice_actuel / val_indice_base)
         loyer_25_ttc = loyer_25_ht * 1.10
         st.info(f"""
-        **Montant Applicable (Période Juin 2025 - Juin 2026)** :
-        *Indice retenu : {val_indice_actuel} (Appliqué au 1er Juin)*
+        **Montant Applicable (Juin 2025 - Juin 2026)** :
+        *Indice retenu : {val_indice_actuel} (Ref T4 2024 publié Mars 2025)*
         👉 **{loyer_25_ttc:,.2f} € TTC / an** soit **{(loyer_25_ttc/4):,.2f} € TTC / trimestre**
         """)
 
@@ -365,7 +360,7 @@ c_pay_1, c_pay_2 = st.columns([1, 2])
 with c_pay_1:
     st.subheader("💰 Paiements Reçus")
     with st.form("add_pay"):
-        d_pay = st.date_input("Date réception", date.today())
+        d_pay = st.date_input("Date réception", date_simulation) # Défaut = Date Simu
         m_pay = st.number_input("Montant (€)", step=100.0)
         if st.form_submit_button("Ajouter"):
             if d_pay <= DATE_JUGEMENT:
@@ -389,14 +384,13 @@ with c_pay_1:
 with c_pay_2:
     st.subheader("📊 Tableau de Bord (Calculé)")
     
-    # Appel du moteur avec indices dynamiques
     base_loyers, _ = generer_echeancier_post_rj(loyer_annuel_ht, val_indice_base, val_indice_actuel)
     
     all_debts = []
-    today = date.today()
+    # UTILISATION DE LA DATE SIMULEE POUR LE CALCUL DU RETARD
+    today = date_simulation
     
     for item in base_loyers:
-        # Dette Principale
         all_debts.append({
             "date": item['date'],
             "label": item['label'],
@@ -407,7 +401,6 @@ with c_pay_2:
             "date_paiement": None,
             "indice": item['indice_used']
         })
-        # Pénalité
         if today > item['date']:
             date_penalite = item['date'] + timedelta(days=1)
             all_debts.append({
@@ -456,7 +449,6 @@ with c_pay_2:
         if debt['reste'] > 0.01 and today > target_date:
             total_retard += debt['reste']
 
-    # Affichage
     debts_display = sorted(debts_to_pay, key=lambda x: x['date'])
     
     final_rows = []
@@ -468,13 +460,12 @@ with c_pay_2:
         else: statut = "🔴 IMPAYÉ"
         
         date_pay_str = format_date_courte(d['date_paiement']) if d['date_paiement'] else "-"
-        # Gestion affichage Indice (Vide si pénalité)
         ind_txt = f"{d['indice']:.2f}" if d['type'] == 'PRINCIPAL' else "-"
         
         final_rows.append({
             "Echéance": format_date_courte(d['date']), 
             "Libellé": d['label'],
-            "Indice Ref.": ind_txt, # NOUVELLE COLONNE UI
+            "Indice Ref.": ind_txt,
             "Montant": d['montant'],
             "Payé": d['paye'],
             "Reste Dû": d['reste'],
@@ -483,7 +474,7 @@ with c_pay_2:
             "Jours Retard": d['jours_retard'],
             "raw_date": d['date'],
             "raw_label": d['label'],
-            "indice": d['indice'] # Pour le PDF
+            "indice": d['indice']
         })
 
     df_suivi = pd.DataFrame(final_rows)
@@ -509,11 +500,11 @@ with c_pay_2:
     )
     
     if total_retard > 0.01:
-        st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
+        st.error(f"⚠️ **RETARD EXIGIBLE TOTAL (Au {format_date_courte(today)}) : {total_retard:,.2f} €**")
         
         if st.button("🔥 TÉLÉCHARGER MISE EN DEMEURE (PDF + GRAPH)"):
             user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
-            pdf = PDFRelance(user_data)
+            pdf = PDFRelance(user_data, format_date_courte(today))
             
             rows_for_pdf = []
             for r in final_rows:
@@ -532,7 +523,7 @@ with c_pay_2:
             st.download_button(
                 "📥 PDF Relance",
                 data=pdf.output(dest='S').encode('latin-1'),
-                file_name=f"Relance_Albion_{date.today()}.pdf",
+                file_name=f"Relance_Albion_{format_date_courte(today)}.pdf",
                 mime="application/pdf"
             )
     else:
