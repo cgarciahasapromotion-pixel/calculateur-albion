@@ -6,7 +6,7 @@ import json
 import io
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.3 (Waterfall)", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.4 (Ledger)", page_icon="📡", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -26,6 +26,7 @@ def json_serial(obj):
     raise TypeError ("Type %s not serializable" % type(obj))
 
 def date_en_francais(d):
+    if not isinstance(d, (date, datetime)): return ""
     mois = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
     return f"{d.day} {mois[d.month]} {d.year}"
 
@@ -130,7 +131,6 @@ class PDFRelance(FPDF):
         self.set_font("Arial", '', 9)
         for row in table_rows:
             if row['reste'] > 0.01:
-                # Police Italique pour les indemnités
                 if "Indemnité" in row['label']: self.set_font("Arial", 'I', 9)
                 else: self.set_font("Arial", '', 9)
                 
@@ -212,6 +212,7 @@ with c_pay_1:
                 st.error("Date antérieure au jugement. Utilisez l'app 'Déclaration'.")
             else:
                 st.session_state.paiements.append({"date": d_pay, "montant": m_pay})
+                st.session_state.paiements.sort(key=lambda x: x['date']) # Tri chrono obligatoire pour Waterfall
                 st.rerun()
     
     if st.session_state.paiements:
@@ -224,59 +225,82 @@ with c_pay_1:
             st.session_state.paiements.pop()
             st.rerun()
 
-# CŒUR DU SYSTÈME : CASCADE WATERFALL
+# CŒUR DU SYSTÈME : CASCADE WATERFALL AVEC DATE DE PAIEMENT
 with c_pay_2:
-    st.subheader("📊 Tableau de Bord (Cascade)")
+    st.subheader("📊 Tableau de Bord (Calculé)")
     
     # 1. Préparation des Dettes
     base_loyers = generer_echeancier_post_rj(loyer_annuel_ht)
     all_debts = []
-    
     today = date.today()
     
-    # On éclate les loyers et on crée les pénalités si nécessaire
     for item in base_loyers:
-        # La dette de loyer existe toujours
+        # La dette de loyer
         all_debts.append({
             "date": item['date'],
             "label": item['label'],
             "montant": item['montant'],
             "type": "PRINCIPAL",
             "paye": 0.0,
-            "reste": item['montant']
+            "reste": item['montant'],
+            "date_paiement": None
         })
         
-        # La pénalité existe si la date est dépassée
+        # La pénalité si retard
         if item['date'] <= today:
             all_debts.append({
-                "date": item['date'], # Même date pour le tri, mais priorité différente
+                "date": item['date'], 
                 "label": f"↪ Indemnité Forfaitaire (Retard {item['label']})",
                 "montant": INDEMNITE_FORFAITAIRE,
-                "type": "PENALITE", # Prioritaire
+                "type": "PENALITE", 
                 "paye": 0.0,
-                "reste": INDEMNITE_FORFAITAIRE
+                "reste": INDEMNITE_FORFAITAIRE,
+                "date_paiement": None
             })
             
-    # 2. Tri Intelligent pour la Cascade
-    # On veut payer d'abord TOUTES les pénalités (anciennes et récentes), PUIS les loyers (anciens puis récents)
-    # Astuce : On trie par Type (Penalité < Principal) puis par Date
+    # 2. Tri pour ordre de paiement (Pénalités d'abord)
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
-    # 3. Application du Paiement (Siphon)
-    solde_dispo = sum(p['montant'] for p in st.session_state.paiements)
+    # 3. Application du Paiement (Consommation des virements un par un)
+    # C'est ici que ça change : on ne somme pas tout, on itère sur les paiements
+    
+    # On crée une copie des paiements pour les "consommer" virtuellement
+    available_payments = [p.copy() for p in st.session_state.paiements] 
+    
     total_retard = 0
     
     for debt in debts_to_pay:
-        # On paie ce qu'on peut
-        paiement_sur_cette_dette = min(debt['montant'], solde_dispo)
+        # Tant que la dette n'est pas payée et qu'il reste des sous
+        payment_date_for_this_debt = None
         
-        debt['paye'] = paiement_sur_cette_dette
-        debt['reste'] = debt['montant'] - paiement_sur_cette_dette
+        for pay in available_payments:
+            if pay['montant'] <= 0: continue # Paiement épuisé
+            if debt['reste'] <= 0: break # Dette éteinte
+            
+            # Combien on prend sur ce paiement ?
+            amount_taken = min(pay['montant'], debt['reste'])
+            
+            pay['montant'] -= amount_taken
+            debt['reste'] -= amount_taken
+            debt['paye'] += amount_taken
+            
+            # La date de paiement de la dette devient la date de ce virement
+            payment_date_for_this_debt = pay['date']
+            
+        debt['date_paiement'] = payment_date_for_this_debt
         
-        solde_dispo -= paiement_sur_cette_dette
-        
-        # Calcul du retard exigible (seulement si la dette est échue)
-        if debt['date'] <= today:
+        # Calcul des Jours de Retard
+        debt['jours_retard'] = 0
+        if debt['reste'] < 0.01 and debt['date_paiement']: 
+            # Payé intégralement : Retard = Date Paiement - Date Echéance
+            delta = (debt['date_paiement'] - debt['date']).days
+            debt['jours_retard'] = max(0, delta)
+        elif debt['date'] <= today:
+            # Impayé ou partiel : Retard = Aujourd'hui - Date Echéance
+            delta = (today - debt['date']).days
+            debt['jours_retard'] = max(0, delta)
+
+        if debt['reste'] > 0.01 and debt['date'] <= today:
             total_retard += debt['reste']
 
     # 4. Remise en ordre Chronologique pour l'Affichage
@@ -285,41 +309,50 @@ with c_pay_2:
     final_rows = []
     for d in debts_display:
         statut = ""
-        if d['reste'] == 0: statut = "PAYÉ"
-        elif d['reste'] < d['montant']: statut = "RELIQUAT"
-        elif d['date'] <= today: statut = "IMPAYÉ" # Ou DÛ pour pénalité
-        else: statut = "À ÉCHOIR"
+        if d['reste'] < 0.01: statut = "✅ PAYÉ"
+        elif d['reste'] < d['montant']: statut = "🟠 PARTIEL"
+        elif d['date'] <= today: statut = "🔴 IMPAYÉ" # Ou DÛ pour pénalité
+        else: statut = "⚪ À ÉCHOIR"
+        
+        # Formatage de la date de paiement
+        date_pay_str = date_en_francais(d['date_paiement']) if d['date_paiement'] else "-"
         
         final_rows.append({
-            "Date Exigible": date_en_francais(d['date']),
-            "label": d['label'],
-            "montant": d['montant'],
-            "paye": d['paye'],
-            "reste": d['reste'],
-            "statut": statut,
-            "raw_date": d['date'], # Pour le PDF
-            "raw_label": d['label'] # Pour le PDF
+            "Echéance": d['date'], # Objet date pour config
+            "Libellé": d['label'],
+            "Montant": d['montant'],
+            "Payé": d['paye'],
+            "Reste Dû": d['reste'],
+            "Statut": statut,
+            "Payé le": date_pay_str,
+            "Jours Retard": d['jours_retard'],
+            
+            # Hidden fields for PDF
+            "raw_date": d['date'],
+            "raw_label": d['label']
         })
 
-    # 5. Rendu Tableau
+    # 5. Rendu Tableau avec Column Config (Nouveau Design)
     df_suivi = pd.DataFrame(final_rows)
     
-    def style_rows(val):
-        color = 'black'
-        if val == "PAYÉ": color = '#28a745'
-        elif val == "RELIQUAT": color = '#fd7e14' # Orange
-        elif "IMPAYÉ" in val: color = '#dc3545'
-        elif "À ÉCHOIR" in val: color = '#6c757d'
-        return f'color: {color}; font-weight: bold'
-
     st.dataframe(
-        df_suivi[["Date Exigible", "label", "montant", "paye", "reste", "statut"]].style.format({
-            "montant": "{:.2f} €", "paye": "{:.2f} €", "reste": "{:.2f} €"
-        }).map(style_rows, subset=['statut']),
-        use_container_width=True
+        df_suivi,
+        column_config={
+            "Echéance": st.column_config.DateColumn("Echéance", format="DD/MM/YYYY"),
+            "Libellé": st.column_config.TextColumn("Libellé", width="large"),
+            "Montant": st.column_config.NumberColumn("Montant", format="%.2f €"),
+            "Payé": st.column_config.NumberColumn("Payé", format="%.2f €"),
+            "Reste Dû": st.column_config.NumberColumn("Reste Dû", format="%.2f €"),
+            "Statut": st.column_config.TextColumn("Statut", width="small"),
+            "Payé le": st.column_config.TextColumn("Reçu le", width="medium"),
+            "Jours Retard": st.column_config.NumberColumn("Retard (Jours)", format="%d j"),
+            # Cacher les colonnes raw
+            "raw_date": None,
+            "raw_label": None
+        },
+        use_container_width=True,
+        hide_index=True
     )
-    
-    st.caption("ℹ️ *Application stricte Art. 1343-1 CC : Les paiements éteignent d'abord les pénalités.*")
     
     if total_retard > 0.01:
         st.error(f"⚠️ **RETARD EXIGIBLE TOTAL : {total_retard:,.2f} €**")
@@ -328,14 +361,13 @@ with c_pay_2:
             user_data = {"nom": id_nom, "lot": id_lot, "iban": id_iban, "bic": id_bic, "email": id_email}
             pdf = PDFRelance(user_data)
             
-            # On prépare les données pour le PDF (on a besoin des objets bruts)
             rows_for_pdf = []
             for r in final_rows:
                 rows_for_pdf.append({
                     "date": r['raw_date'],
                     "label": r['raw_label'],
-                    "montant": r['montant'],
-                    "reste": r['reste']
+                    "montant": r['Montant'],
+                    "reste": r['Reste Dû']
                 })
                 
             pdf.generate_letter(total_retard, rows_for_pdf, st.session_state.paiements)
