@@ -6,7 +6,7 @@ import json
 import io
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Albion Monitor V1.4 (Ledger)", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Albion Monitor V1.5 (Lease Enforcer)", page_icon="⚖️", layout="wide")
 
 # --- CONSTANTES ---
 DATE_JUGEMENT = date(2025, 6, 26)
@@ -107,22 +107,25 @@ class PDFRelance(FPDF):
         self.cell(0, 5, "(Loyers Post-Jugement - Art. L.622-17 Code de commerce)", 0, 1, 'C')
         self.ln(10)
         
-        # Corps
+        # Corps (VERSION RENFORCÉE BAIL)
         self.set_font("Arial", '', 10)
         txt = ("Maitre,\n\n"
-               "Sauf erreur ou omission de ma part, je constate a ce jour un defaut de paiement des loyers "
-               "courants (nes posterieurement au jugement d'ouverture).\n\n"
-               "Conformement a l'article L.622-17 I du Code de commerce, ces creances sont payables a leur echeance.\n\n"
-               "IMPORTANT : En application de l'article 1343-1 du Code Civil, les paiements partiels recus ont ete "
-               "imputes prioritairement sur les interets et penalites de retard, et subsidiairement sur le capital.\n\n"
-               "Le non-paiement de ces sommes constitue un motif de resiliation du bail (Art L.622-14).")
+               "Je constate a ce jour un defaut de paiement des loyers courants (nes posterieurement au jugement d'ouverture).\n\n"
+               "Conformement a l'Article 11 du bail, ces sommes etaient exigibles le 10 du mois. "
+               "L'Article L.622-17 I du Code de commerce impose leur paiement a l'echeance.\n\n"
+               "Je vous rappelle les dispositions contractuelles suivantes :\n"
+               "- Art 4-10 (Clause de non-tolerance) : Aucun retard passe ou tolerance de ma part ne vaut renonciation a l'application stricte des delais.\n"
+               "- Art 15 (Frais) : Tous les frais de recouvrement sont a la charge exclusive du preneur.\n"
+               "- Art L.441-10 C.Com : L'indemnite forfaitaire de 40 EUR est due de plein droit des le 11 du mois.\n\n"
+               "Note : Les paiements partiels recus ont ete imputes prioritairement sur les penalites (Art 1343-1 Code Civil).")
+        
         self.multi_cell(0, 5, txt.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(5)
         
         # Tableau
         self.set_fill_color(255, 200, 200)
         self.set_font("Arial", 'B', 9)
-        self.cell(0, 6, "DETAIL DES IMPAYES (METHODE WATERFALL ART. 1343-1 CC)", 1, 1, 'L', fill=True)
+        self.cell(0, 6, "DETAIL DES IMPAYES (METHODE WATERFALL)", 1, 1, 'L', fill=True)
         self.cell(30, 6, "Exigibilite", 1)
         self.cell(80, 6, "Libelle", 1)
         self.cell(30, 6, "Montant", 1)
@@ -164,9 +167,18 @@ with st.sidebar:
     id_email = st.text_input("Email")
     
     st.divider()
-    with st.expander("📈 Données Bail & ILC", expanded=True):
+    # NOUVEAU : ENCART JURIDIQUE
+    with st.expander("⚖️ Armes Juridiques (Bail)", expanded=True):
+        st.info("""
+        **Art. 11 :** Paiement le 10 du mois.
+        **Art. 4-10 :** Non-tolérance (Aucun retard n'est un droit acquis).
+        **Art. 15 :** Frais de recouvrement à charge du locataire.
+        **Art. 14 :** Résiliation si impayé > 1 mois.
+        **L.441-10 :** 40€ dus dès le 11 du mois.
+        """)
+        
+    with st.expander("📈 Données ILC", expanded=False):
         st.write(f"**Début Bail :** {date_en_francais(DATE_DEBUT_BAIL)}")
-        st.write("**Indices retenus :**")
         df_indices = pd.DataFrame(list(INDICES.items()), columns=["Période", "Valeur"])
         st.dataframe(df_indices, hide_index=True)
     
@@ -212,7 +224,7 @@ with c_pay_1:
                 st.error("Date antérieure au jugement. Utilisez l'app 'Déclaration'.")
             else:
                 st.session_state.paiements.append({"date": d_pay, "montant": m_pay})
-                st.session_state.paiements.sort(key=lambda x: x['date']) # Tri chrono obligatoire pour Waterfall
+                st.session_state.paiements.sort(key=lambda x: x['date']) 
                 st.rerun()
     
     if st.session_state.paiements:
@@ -246,11 +258,12 @@ with c_pay_2:
             "date_paiement": None
         })
         
-        # La pénalité si retard
-        if item['date'] <= today:
+        # La pénalité si retard (Trigger le 11 du mois, donc > 10)
+        # Note : item['date'] est le 10. Si today > item['date'], on est le 11 ou plus.
+        if today > item['date']:
             all_debts.append({
                 "date": item['date'], 
-                "label": f"↪ Indemnité Forfaitaire (Retard {item['label']})",
+                "label": f"↪ Indemnité Forfaitaire (Art L.441-10 & Art 15 Bail)",
                 "montant": INDEMNITE_FORFAITAIRE,
                 "type": "PENALITE", 
                 "paye": 0.0,
@@ -262,63 +275,56 @@ with c_pay_2:
     debts_to_pay = sorted(all_debts, key=lambda x: (0 if x['type'] == 'PENALITE' else 1, x['date']))
     
     # 3. Application du Paiement (Consommation des virements un par un)
-    # C'est ici que ça change : on ne somme pas tout, on itère sur les paiements
-    
-    # On crée une copie des paiements pour les "consommer" virtuellement
     available_payments = [p.copy() for p in st.session_state.paiements] 
-    
     total_retard = 0
     
     for debt in debts_to_pay:
-        # Tant que la dette n'est pas payée et qu'il reste des sous
         payment_date_for_this_debt = None
-        
         for pay in available_payments:
-            if pay['montant'] <= 0: continue # Paiement épuisé
-            if debt['reste'] <= 0: break # Dette éteinte
+            if pay['montant'] <= 0: continue 
+            if debt['reste'] <= 0: break 
             
-            # Combien on prend sur ce paiement ?
             amount_taken = min(pay['montant'], debt['reste'])
-            
             pay['montant'] -= amount_taken
             debt['reste'] -= amount_taken
             debt['paye'] += amount_taken
-            
-            # La date de paiement de la dette devient la date de ce virement
             payment_date_for_this_debt = pay['date']
             
         debt['date_paiement'] = payment_date_for_this_debt
         
-        # Calcul des Jours de Retard
+        # Calcul Jours Retard
         debt['jours_retard'] = 0
+        target_date = debt['date']
+        
         if debt['reste'] < 0.01 and debt['date_paiement']: 
-            # Payé intégralement : Retard = Date Paiement - Date Echéance
-            delta = (debt['date_paiement'] - debt['date']).days
+            delta = (debt['date_paiement'] - target_date).days
             debt['jours_retard'] = max(0, delta)
-        elif debt['date'] <= today:
-            # Impayé ou partiel : Retard = Aujourd'hui - Date Echéance
-            delta = (today - debt['date']).days
+        elif today > target_date:
+            delta = (today - target_date).days
             debt['jours_retard'] = max(0, delta)
 
-        if debt['reste'] > 0.01 and debt['date'] <= today:
+        if debt['reste'] > 0.01 and today > target_date: # Uniquement si date dépassée
             total_retard += debt['reste']
 
-    # 4. Remise en ordre Chronologique pour l'Affichage
+    # 4. Remise en ordre Chrono
     debts_display = sorted(debts_to_pay, key=lambda x: x['date'])
     
     final_rows = []
     for d in debts_display:
         statut = ""
+        # Si c'est une pénalité, le statut est différent
+        is_future = d['date'] > today
+        
         if d['reste'] < 0.01: statut = "✅ PAYÉ"
         elif d['reste'] < d['montant']: statut = "🟠 PARTIEL"
-        elif d['date'] <= today: statut = "🔴 IMPAYÉ" # Ou DÛ pour pénalité
-        else: statut = "⚪ À ÉCHOIR"
+        elif is_future: statut = "⚪ À ÉCHOIR"
+        else: statut = "🔴 IMPAYÉ" # Ou DÛ pour pénalité
         
-        # Formatage de la date de paiement
+        # Formatage date
         date_pay_str = date_en_francais(d['date_paiement']) if d['date_paiement'] else "-"
         
         final_rows.append({
-            "Echéance": d['date'], # Objet date pour config
+            "Echéance": d['date'],
             "Libellé": d['label'],
             "Montant": d['montant'],
             "Payé": d['paye'],
@@ -326,13 +332,11 @@ with c_pay_2:
             "Statut": statut,
             "Payé le": date_pay_str,
             "Jours Retard": d['jours_retard'],
-            
-            # Hidden fields for PDF
             "raw_date": d['date'],
             "raw_label": d['label']
         })
 
-    # 5. Rendu Tableau avec Column Config (Nouveau Design)
+    # 5. Rendu Tableau
     df_suivi = pd.DataFrame(final_rows)
     
     st.dataframe(
@@ -346,7 +350,6 @@ with c_pay_2:
             "Statut": st.column_config.TextColumn("Statut", width="small"),
             "Payé le": st.column_config.TextColumn("Reçu le", width="medium"),
             "Jours Retard": st.column_config.NumberColumn("Retard (Jours)", format="%d j"),
-            # Cacher les colonnes raw
             "raw_date": None,
             "raw_label": None
         },
